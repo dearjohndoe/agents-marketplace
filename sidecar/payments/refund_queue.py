@@ -38,6 +38,11 @@ class PendingRefund:
     created_at: int
     last_attempt_at: int | None
     next_attempt_at: int
+    # When 1, refund_worker must NOT skip on tx_store.is_processed=True.
+    # Used for failures AFTER mark_processed where service was not delivered
+    # (e.g., OOS race on direct refund_user fail, jobs.submit crash, runner
+    # refund_user fail).
+    force_refund: int = 0
 
 
 class RefundQueue:
@@ -57,6 +62,8 @@ class RefundQueue:
 
     async def init(self) -> None:
         self._conn = await aiosqlite.connect(self._path)
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA busy_timeout=15000")
         await self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_refunds (
@@ -72,10 +79,18 @@ class RefundQueue:
                 last_error TEXT,
                 created_at INTEGER NOT NULL,
                 last_attempt_at INTEGER,
-                next_attempt_at INTEGER NOT NULL
+                next_attempt_at INTEGER NOT NULL,
+                force_refund INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        # Idempotent migration for DBs created before force_refund existed.
+        try:
+            await self._conn.execute(
+                "ALTER TABLE pending_refunds ADD COLUMN force_refund INTEGER NOT NULL DEFAULT 0"
+            )
+        except aiosqlite.OperationalError:
+            pass  # column already exists
         await self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pending_refunds_status_next "
             "ON pending_refunds(status, next_attempt_at)"
@@ -95,8 +110,15 @@ class RefundQueue:
         sender: str | None = None,
         amount: int | None = None,
         sku_id: str | None = None,
+        force_refund: bool = False,
     ) -> bool:
-        """Insert pending refund. Returns True if newly inserted, False if already present."""
+        """Insert pending refund. Returns True if newly inserted, False if already present.
+
+        ``force_refund=True`` tells the worker to bypass its is_processed
+        race-guard. Use only when service was NOT delivered despite
+        mark_processed having succeeded (OOS race after direct refund fail,
+        jobs.submit crash, runner refund fail).
+        """
         if not self._conn:
             await self.init()
         now = int(time.time())
@@ -105,10 +127,11 @@ class RefundQueue:
                 """
                 INSERT INTO pending_refunds
                   (tx_hash, nonce, rail, sender, amount, sku_id, status,
-                   attempts, created_at, next_attempt_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+                   attempts, created_at, next_attempt_at, force_refund)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
                 """,
-                (tx_hash, nonce, rail, sender, amount, sku_id, now, now),
+                (tx_hash, nonce, rail, sender, amount, sku_id, now, now,
+                 1 if force_refund else 0),
             )
             await self._conn.commit()
             return True
@@ -122,7 +145,7 @@ class RefundQueue:
             """
             SELECT tx_hash, nonce, rail, sender, amount, sku_id, status,
                    refund_tx, attempts, last_error, created_at,
-                   last_attempt_at, next_attempt_at
+                   last_attempt_at, next_attempt_at, force_refund
               FROM pending_refunds WHERE tx_hash = ?
             """,
             (tx_hash,),
@@ -138,7 +161,7 @@ class RefundQueue:
             """
             SELECT tx_hash, nonce, rail, sender, amount, sku_id, status,
                    refund_tx, attempts, last_error, created_at,
-                   last_attempt_at, next_attempt_at
+                   last_attempt_at, next_attempt_at, force_refund
               FROM pending_refunds
              WHERE status = 'pending'
                AND next_attempt_at <= ?
@@ -238,28 +261,29 @@ class RefundQueue:
         )
         await self._conn.commit()
 
-    async def revert_stale_refunding(self, older_than_seconds: int = 600) -> int:
-        """Revert entries stuck in 'refunding' for too long back to 'pending'.
+    async def list_stale_refunding(
+        self, older_than_seconds: int = 600,
+    ) -> list[PendingRefund]:
+        """Return entries stuck in 'refunding' since before ``older_than_seconds``.
 
-        Called on startup to recover from a crash mid-refund. The worker will
-        retry; the worst case is a double-refund if the original send_jetton
-        actually completed, hence the recommended balance precheck below.
+        Caller (refund_worker) probes the chain for a matching refund tx and
+        decides whether to mark_refunded (already sent) or mark_failed_transient
+        (revert to pending for retry). Blind reverting could cause double-refunds.
         """
         if not self._conn:
             await self.init()
         cutoff = int(time.time()) - older_than_seconds
-        cur = await self._conn.execute(
+        async with self._conn.execute(
             """
-            UPDATE pending_refunds
-               SET status = 'pending',
-                   last_error = COALESCE(last_error, '') ||
-                                ' [recovered from stale refunding]',
-                   next_attempt_at = ?
+            SELECT tx_hash, nonce, rail, sender, amount, sku_id, status,
+                   refund_tx, attempts, last_error, created_at,
+                   last_attempt_at, next_attempt_at, force_refund
+              FROM pending_refunds
              WHERE status = 'refunding'
                AND last_attempt_at IS NOT NULL
                AND last_attempt_at < ?
             """,
-            (int(time.time()), cutoff),
-        )
-        await self._conn.commit()
-        return cur.rowcount
+            (cutoff,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [PendingRefund(*row) for row in rows]

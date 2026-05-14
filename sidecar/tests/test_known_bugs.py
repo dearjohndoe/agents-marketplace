@@ -801,3 +801,447 @@ async def test_refund_queue_state_machine(tmp_path):
         assert not await rq.claim("t1")
     finally:
         await rq.close()
+
+
+# ────────────────────────────────────────────────────────────────────────
+# BUG 11 — Post-verify failures must always refund (no silent 500s)
+# ────────────────────────────────────────────────────────────────────────
+
+async def _build_post_verify_app(tmp_path, monkeypatch):
+    """App configured so /invoke reaches the post-verify code path with a
+    successfully verified payment. Caller mutates tx_store/jobs/stock to
+    inject the specific failure mode under test."""
+    from aiohttp.test_utils import TestClient, TestServer
+    sku = AgentSku(
+        sku_id=DEFAULT_SKU_ID, title=DEFAULT_SKU_ID,
+        price_ton=1_000_000, price_usd=None, initial_stock=None,
+    )
+    settings = _make_settings(
+        tmp_path, skus=(sku,),
+        agent_price=1_000_000, payment_rails=("TON",),
+    )
+    app = SidecarApp(settings)
+    app.sidecar_id = "sid-test"
+    app.args_schema = {"text": {"type": "string", "required": True}}
+    app._file_store_dir.mkdir(parents=True, exist_ok=True)
+    app.verifier.verify = AsyncMock(return_value=VerifiedPayment(
+        tx_hash="real-hash", sender="EQsender", recipient="EQagent",
+        amount=1_000_000, comment="n:sid-test",
+    ))
+    app.tx_store.is_processed = AsyncMock(return_value=False)
+
+    async def fake_startup():
+        app._file_store_dir.mkdir(parents=True, exist_ok=True)
+        await app.stock.init(app.settings.skus)
+        await app.refund_queue.init()
+
+    async def fake_shutdown():
+        await app.refund_queue.close()
+        await app.tx_store.close()
+        await app.stock.close()
+
+    app.startup = fake_startup  # type: ignore[method-assign]
+    app.shutdown = fake_shutdown  # type: ignore[method-assign]
+    web_app = app.build_web_app()
+    web_app.on_startup.clear()
+    web_app.on_shutdown.clear()
+    web_app.on_startup.append(lambda _: fake_startup())
+    web_app.on_shutdown.append(lambda _: fake_shutdown())
+    return app, TestClient(TestServer(web_app))
+
+
+async def test_mark_processed_failure_after_verify_enqueues_refund(tmp_path, monkeypatch):
+    """When tx_store.mark_processed raises a non-IntegrityError (e.g. SQLite
+    locked beyond busy_timeout, disk full, corruption), money was already
+    verified — handler MUST enqueue a refund instead of returning bare 500.
+    """
+    app, tc = await _build_post_verify_app(tmp_path, monkeypatch)
+    async with tc as c:
+        app.tx_store.mark_processed = AsyncMock(
+            side_effect=RuntimeError("simulated disk failure")
+        )
+        resp = await c.post("/invoke", json={
+            "capability": "translate", "tx": "real-hash",
+            "nonce": "n:sid-test", "body": {"text": "hi"},
+        })
+        assert resp.status == 503
+        data = await resp.json()
+        assert data["refund_pending"] is True
+        entry = await app.refund_queue.get("real-hash")
+        assert entry is not None
+        assert entry.status == "pending"
+        assert entry.sender == "EQsender"
+        assert entry.amount == 1_000_000
+        # No force_refund — mark_processed never succeeded so the worker's
+        # is_processed race-guard is safe.
+        assert entry.force_refund == 0
+
+
+async def test_mark_processed_integrity_error_returns_409_no_refund(tmp_path, monkeypatch):
+    """Parallel /invoke for the same tx_hash: one wins the PRIMARY KEY race,
+    the other gets IntegrityError. Loser must return 409 and MUST NOT enqueue
+    refund — the winner is delivering service for this payment.
+    """
+    import aiosqlite
+    app, tc = await _build_post_verify_app(tmp_path, monkeypatch)
+    async with tc as c:
+        app.tx_store.mark_processed = AsyncMock(
+            side_effect=aiosqlite.IntegrityError("UNIQUE constraint failed")
+        )
+        resp = await c.post("/invoke", json={
+            "capability": "translate", "tx": "real-hash",
+            "nonce": "n:sid-test", "body": {"text": "hi"},
+        })
+        assert resp.status == 409
+        data = await resp.json()
+        assert data["error"] == "Transaction already used"
+        # Queue must be untouched.
+        entry = await app.refund_queue.get("real-hash")
+        assert entry is None
+
+
+async def test_jobs_submit_failure_enqueues_refund_with_force(tmp_path, monkeypatch):
+    """If jobs.submit raises after mark_processed succeeded, the worker's
+    is_processed race-guard would skip the refund. The handler MUST set
+    force_refund=True so the worker proceeds anyway.
+    """
+    app, tc = await _build_post_verify_app(tmp_path, monkeypatch)
+    async with tc as c:
+        app.tx_store.mark_processed = AsyncMock()  # succeeds
+        app.tx_store.is_processed = AsyncMock(return_value=False)
+        app.jobs.submit = AsyncMock(side_effect=RuntimeError("job system down"))
+        resp = await c.post("/invoke", json={
+            "capability": "translate", "tx": "real-hash",
+            "nonce": "n:sid-test", "body": {"text": "hi"},
+        })
+        assert resp.status == 503
+        data = await resp.json()
+        assert data["refund_pending"] is True
+        entry = await app.refund_queue.get("real-hash")
+        assert entry is not None
+        assert entry.force_refund == 1, (
+            "mark_processed already ran — worker must bypass is_processed guard"
+        )
+
+
+async def test_refund_worker_force_refund_bypasses_is_processed_guard(tmp_path):
+    """Worker race-guard: with force_refund=1, skip the is_processed check and
+    refund the user even though the tx was marked processed.
+    """
+    from payments import RefundQueue, ProcessedTxStore
+    rq = RefundQueue(str(tmp_path / "pr.db"))
+    txs = ProcessedTxStore(str(tmp_path / "tx.db"))
+    await rq.init()
+    await txs.init()
+    try:
+        await txs.mark_processed("forced-tx")
+        await rq.enqueue(
+            tx_hash="forced-tx", nonce="n", rail="TON",
+            sender="EQsender", amount=1_000_000, sku_id="s1",
+            force_refund=True,
+        )
+        entry = await rq.get("forced-tx")
+        assert entry is not None
+        assert entry.force_refund == 1
+        # Sanity: a plain entry would be skipped by the guard.
+        await rq.enqueue(
+            tx_hash="normal-tx", nonce="n", rail="TON",
+            sender="EQsender", amount=1_000_000, sku_id="s1",
+        )
+        normal = await rq.get("normal-tx")
+        assert normal.force_refund == 0
+    finally:
+        await rq.close()
+        await txs.close()
+
+
+async def test_processed_tx_store_uses_wal_and_busy_timeout(tmp_path):
+    """Sanity check: WAL + busy_timeout=15s are applied on init."""
+    import aiosqlite
+    from payments import ProcessedTxStore
+    store = ProcessedTxStore(str(tmp_path / "tx.db"))
+    await store.init()
+    try:
+        async with store._conn.execute("PRAGMA journal_mode") as cur:
+            row = await cur.fetchone()
+        assert row[0].lower() == "wal"
+        async with store._conn.execute("PRAGMA busy_timeout") as cur:
+            row = await cur.fetchone()
+        assert row[0] == 15000
+    finally:
+        await store.close()
+
+
+# ────────────────────────────────────────────────────────────────────────
+# BUG 12 — Worker must not double-refund after a crash mid-send
+# ────────────────────────────────────────────────────────────────────────
+
+async def test_list_stale_refunding_returns_old_refunding_entries(tmp_path):
+    """list_stale_refunding selects entries stuck in 'refunding' past the
+    cutoff and leaves their status untouched (caller decides next step)."""
+    import time
+    from payments import RefundQueue
+    rq = RefundQueue(str(tmp_path / "pr.db"))
+    await rq.init()
+    try:
+        await rq.enqueue(tx_hash="stuck", nonce="n", rail="TON",
+                         sender="EQs", amount=1_000_000, sku_id="s")
+        await rq.claim("stuck")  # status='refunding', last_attempt_at=now
+        # Backdate last_attempt_at so it counts as stale.
+        await rq._conn.execute(
+            "UPDATE pending_refunds SET last_attempt_at = ? WHERE tx_hash = 'stuck'",
+            (int(time.time()) - 3600,),
+        )
+        await rq._conn.commit()
+
+        stale = await rq.list_stale_refunding(older_than_seconds=600)
+        assert len(stale) == 1
+        assert stale[0].tx_hash == "stuck"
+        # No mutation — entry still in 'refunding'.
+        entry = await rq.get("stuck")
+        assert entry.status == "refunding"
+    finally:
+        await rq.close()
+
+
+async def test_refund_worker_dedup_adopts_existing_onchain_hash(tmp_path, monkeypatch):
+    """When a prior worker crashed between send() and mark_refunded(), the
+    on-chain refund exists. On retry the worker must probe, find it, and
+    mark_refunded WITHOUT sending a second refund.
+    """
+    import api.domain.refund_worker as worker_module
+    from api.domain.refund_worker import _process_entry
+    from contextlib import asynccontextmanager
+    from payments import RefundQueue
+
+    rq = RefundQueue(str(tmp_path / "pr.db"))
+    await rq.init()
+    try:
+        await rq.enqueue(tx_hash="tx-A", nonce="n", rail="TON",
+                         sender="EQuser", amount=1_000_000, sku_id="s")
+        # Simulate a prior failed attempt: attempts=1 in 'pending' state.
+        await rq._conn.execute(
+            "UPDATE pending_refunds SET attempts = 1 WHERE tx_hash = 'tx-A'"
+        )
+        await rq._conn.commit()
+        entry = await rq.get("tx-A")
+
+        @asynccontextmanager
+        async def fake_client_ctx(app):
+            yield object()  # dummy
+
+        async def fake_find(**kwargs):
+            return "ALREADY_REFUNDED_HASH"
+
+        send_calls = []
+        async def fake_refund_user(**kwargs):
+            send_calls.append(kwargs)
+            return "WOULD_BE_DOUBLE_SEND"
+
+        monkeypatch.setattr(worker_module, "_acquire_lite_client", fake_client_ctx)
+        monkeypatch.setattr(worker_module, "find_existing_refund_tx", fake_find)
+        monkeypatch.setattr(worker_module, "refund_user", fake_refund_user)
+
+        # Minimal fake app surface for _process_entry.
+        app = SimpleNamespace(
+            refund_queue=rq,
+            tx_store=SimpleNamespace(is_processed=AsyncMock(return_value=False)),
+            settings=SimpleNamespace(
+                agent_wallet="EQagent", refund_max_attempts=10,
+                refund_fee_nanoton=500_000,
+            ),
+            sidecar_id="sid-test",
+            sender=None, _agent_jetton_wallet=None, verifier=None,
+            testnet=False,
+        )
+        async def fake_balance_check(*a, **kw):
+            return True, ""
+        monkeypatch.setattr(worker_module, "_check_balance_for_refund", fake_balance_check)
+        async def fake_recover(*a, **kw):
+            return True
+        monkeypatch.setattr(worker_module, "_recover_payment_info", fake_recover)
+
+        await _process_entry(app, entry)
+
+        # Worker must adopt the existing refund hash, NOT send again.
+        assert send_calls == [], (
+            f"refund_user should not run when prior refund detected on-chain; called with {send_calls}"
+        )
+        final = await rq.get("tx-A")
+        assert final.status == "refunded"
+        assert final.refund_tx == "ALREADY_REFUNDED_HASH"
+    finally:
+        await rq.close()
+
+
+async def test_refund_worker_first_attempt_skips_probe(tmp_path, monkeypatch):
+    """First attempt has nothing to dedup against — probe must be skipped to
+    save one RPC per refund."""
+    import api.domain.refund_worker as worker_module
+    from api.domain.refund_worker import _process_entry
+    from payments import RefundQueue
+
+    rq = RefundQueue(str(tmp_path / "pr.db"))
+    await rq.init()
+    try:
+        await rq.enqueue(tx_hash="tx-B", nonce="n", rail="TON",
+                         sender="EQuser", amount=1_000_000, sku_id="s")
+        entry = await rq.get("tx-B")
+        assert entry.attempts == 0
+
+        probe_calls = []
+        async def fake_find(**kwargs):
+            probe_calls.append(kwargs)
+            return None
+        monkeypatch.setattr(worker_module, "find_existing_refund_tx", fake_find)
+
+        send_calls = []
+        async def fake_refund_user(**kwargs):
+            send_calls.append(kwargs)
+            return "REFUND_TX_HASH"
+        monkeypatch.setattr(worker_module, "refund_user", fake_refund_user)
+
+        async def fake_balance_check(*a, **kw):
+            return True, ""
+        monkeypatch.setattr(worker_module, "_check_balance_for_refund", fake_balance_check)
+
+        app = SimpleNamespace(
+            refund_queue=rq,
+            tx_store=SimpleNamespace(is_processed=AsyncMock(return_value=False)),
+            settings=SimpleNamespace(
+                agent_wallet="EQagent", refund_max_attempts=10,
+                refund_fee_nanoton=500_000,
+            ),
+            sidecar_id="sid-test",
+            sender=None, _agent_jetton_wallet=None, verifier=None,
+            testnet=False,
+        )
+
+        await _process_entry(app, entry)
+        assert probe_calls == [], "first attempt should not probe on-chain"
+        assert len(send_calls) == 1
+        final = await rq.get("tx-B")
+        assert final.status == "refunded"
+        assert final.refund_tx == "REFUND_TX_HASH"
+    finally:
+        await rq.close()
+
+
+async def test_recover_stale_refunding_marks_already_refunded(tmp_path, monkeypatch):
+    """Stale-refunding entry whose refund landed on-chain (crash between
+    send() and mark_refunded) must be marked 'refunded' on recovery, not
+    blindly reverted to 'pending' (which would trigger a double-send).
+    """
+    import api.domain.refund_worker as worker_module
+    from api.domain.refund_worker import _recover_stale_refunding
+    from contextlib import asynccontextmanager
+    import time
+    from payments import RefundQueue
+
+    rq = RefundQueue(str(tmp_path / "pr.db"))
+    await rq.init()
+    try:
+        await rq.enqueue(tx_hash="tx-C", nonce="n", rail="TON",
+                         sender="EQuser", amount=1_000_000, sku_id="s")
+        await rq.claim("tx-C")
+        await rq._conn.execute(
+            "UPDATE pending_refunds SET last_attempt_at = ? WHERE tx_hash = 'tx-C'",
+            (int(time.time()) - 3600,),
+        )
+        await rq._conn.commit()
+
+        @asynccontextmanager
+        async def fake_client_ctx(app):
+            yield object()
+
+        async def fake_find(**kwargs):
+            assert kwargs["original_tx_hash"] == "tx-C"
+            return "ONCHAIN_REFUND_HASH"
+
+        monkeypatch.setattr(worker_module, "_acquire_lite_client", fake_client_ctx)
+        monkeypatch.setattr(worker_module, "find_existing_refund_tx", fake_find)
+
+        app = SimpleNamespace(
+            refund_queue=rq, verifier=None, sidecar_id="sid-test",
+            settings=SimpleNamespace(agent_wallet="EQagent", testnet=False),
+        )
+        await _recover_stale_refunding(app, older_than_seconds=600)
+
+        final = await rq.get("tx-C")
+        assert final.status == "refunded"
+        assert final.refund_tx == "ONCHAIN_REFUND_HASH"
+    finally:
+        await rq.close()
+
+
+async def test_recover_stale_refunding_reverts_when_not_onchain(tmp_path, monkeypatch):
+    """If the probe finds no refund on-chain, the stale entry returns to
+    'pending' with a backoff so the worker retries it on the next tick."""
+    import api.domain.refund_worker as worker_module
+    from api.domain.refund_worker import _recover_stale_refunding
+    from contextlib import asynccontextmanager
+    import time
+    from payments import RefundQueue
+
+    rq = RefundQueue(str(tmp_path / "pr.db"))
+    await rq.init()
+    try:
+        await rq.enqueue(tx_hash="tx-D", nonce="n", rail="TON",
+                         sender="EQuser", amount=1_000_000, sku_id="s")
+        await rq.claim("tx-D")
+        await rq._conn.execute(
+            "UPDATE pending_refunds SET last_attempt_at = ? WHERE tx_hash = 'tx-D'",
+            (int(time.time()) - 3600,),
+        )
+        await rq._conn.commit()
+
+        @asynccontextmanager
+        async def fake_client_ctx(app):
+            yield object()
+        async def fake_find(**kwargs):
+            return None  # nothing on-chain
+        monkeypatch.setattr(worker_module, "_acquire_lite_client", fake_client_ctx)
+        monkeypatch.setattr(worker_module, "find_existing_refund_tx", fake_find)
+
+        app = SimpleNamespace(
+            refund_queue=rq, verifier=None, sidecar_id="sid-test",
+            settings=SimpleNamespace(agent_wallet="EQagent", testnet=False),
+        )
+        await _recover_stale_refunding(app, older_than_seconds=600)
+
+        final = await rq.get("tx-D")
+        assert final.status == "pending"
+        assert "stale" in (final.last_error or "")
+    finally:
+        await rq.close()
+
+
+async def test_find_existing_refund_tx_matches_ton_comment(tmp_path):
+    """Probe must recognize a refund_body in an outgoing TON internal msg
+    by matching (tx, sidecar_id) — reason and other fields are ignored."""
+    from unittest.mock import MagicMock
+    from api.domain.refund import find_existing_refund_tx
+    from transfer import refund_body
+
+    body = refund_body("paid-tx-hash", "out_of_stock", "sid-test")
+    # Fake out_msg/tx objects mirroring tonutils' shape: tx.out_msgs, msg.body,
+    # tx.cell.hash.hex().
+    msg = MagicMock(body=body)
+    tx = MagicMock(out_msgs=[msg])
+    tx.cell.hash.hex.return_value = "ONCHAIN_REFUND_HASH"
+    client = MagicMock()
+    async def fake_get_txs(addr, limit):
+        return [tx]
+    client.get_transactions = fake_get_txs
+
+    found = await find_existing_refund_tx(
+        client=client, agent_wallet="EQagent", rail="TON",
+        original_tx_hash="paid-tx-hash", sidecar_id="sid-test",
+    )
+    assert found == "ONCHAIN_REFUND_HASH"
+
+    not_found = await find_existing_refund_tx(
+        client=client, agent_wallet="EQagent", rail="TON",
+        original_tx_hash="different-tx", sidecar_id="sid-test",
+    )
+    assert not_found is None
