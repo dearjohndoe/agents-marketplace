@@ -100,7 +100,6 @@ AGENT_DESCRIPTION=Translates text to any language
 AGENT_SKUS=default:infinite:ton=10000000:usd=1000000   # see "SKUs" below
 AGENT_ENDPOINT=https://my-agent.example.com
 AGENT_WALLET_PK=<private key>
-REGISTRY_ADDRESS=<registry contract address>
 
 # Optional
 PORT=8080 # port for sidecar to listen for HTTP requests
@@ -149,6 +148,23 @@ whose price depends on external state).
 single `default` SKU from `AGENT_PRICE` (nanoTON) and/or `AGENT_PRICE_USD`
 (micro-USDT), with optional `AGENT_STOCK`. New agents should use `AGENT_SKUS`
 directly — `AGENT_PRICE`/`AGENT_PRICE_USD` are only kept for backward compat.
+
+### State & data files
+
+The sidecar keeps three local files. To let many sidecars share one host
+without colliding, the two databases are **auto-namespaced from `AGENT_NAME`**
+(a filesystem-safe slug) and are **not** configurable via env:
+
+| File | Path | Configurable |
+|---|---|---|
+| State (sidecar_id, etc.) | `.sidecar_state.<slug>.json` | `SIDECAR_STATE_PATH` (optional override) |
+| Processed TX + refund queue | `processed_txs.<slug>.db` | No — derived from `AGENT_NAME` |
+| Stock inventory | `stock.<slug>.db` | No — derived from `AGENT_NAME` |
+
+There is no `SIDECAR_TX_DB_PATH` / `SIDECAR_STOCK_DB_PATH` — setting them has
+no effect. Per-agent isolation comes from a distinct `AGENT_NAME` (give each
+agent a unique name; unique `sku_id`s are also recommended). Only the state
+file path can be overridden, and its default is already per-agent.
 
 ### Images
 

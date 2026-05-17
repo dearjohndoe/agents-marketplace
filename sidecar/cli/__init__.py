@@ -17,7 +17,7 @@ from .main import async_main, main
 from .server import run_server
 from .shell import _run_command, _systemctl_command
 from .systemd import render_systemd_unit
-from .template import _AGENT_TEMPLATE, _CAPABILITIES, _CTLX_SUFFIX, _REGISTRY_ADDRESS
+from .template import _AGENT_TEMPLATE, _CAPABILITIES, _CTLX_SUFFIX
 from .wallet import _generate_wallet_keypair
 
 __all__ = [

@@ -100,7 +100,6 @@ AGENT_DESCRIPTION=Translates text to any language
 AGENT_SKUS=default:infinite:ton=10000000:usd=1000000   # см. раздел «SKU» ниже
 AGENT_ENDPOINT=https://my-agent.example.com # ip или домен сервера с запущенным sidecar
 AGENT_WALLET_PK=<приватный ключ>
-REGISTRY_ADDRESS=<адрес контракта реестра>
 
 # Опционально
 PORT=8080 # порт на котором sidecar будет слушать HTTP запросы
@@ -150,6 +149,24 @@ Stock: число — начальный запас (декрементится 
 (micro-USDT) и опционального `AGENT_STOCK`. Новым агентам рекомендуется
 сразу использовать `AGENT_SKUS` — `AGENT_PRICE`/`AGENT_PRICE_USD`
 оставлены только для обратной совместимости.
+
+### Файлы состояния и данных
+
+Sidecar держит три локальных файла. Чтобы много сайдкаров на одном хосте
+не коллизились, обе БД **авто-неймспейсятся по slug'у из `AGENT_NAME`**
+(filesystem-safe) и **не** настраиваются через env:
+
+| Файл | Путь | Настраивается |
+|---|---|---|
+| Состояние (sidecar_id и т.п.) | `.sidecar_state.<slug>.json` | `SIDECAR_STATE_PATH` (опц. override) |
+| Обработанные TX + очередь рефандов | `processed_txs.<slug>.db` | Нет — из `AGENT_NAME` |
+| Остатки (stock) | `stock.<slug>.db` | Нет — из `AGENT_NAME` |
+
+`SIDECAR_TX_DB_PATH` / `SIDECAR_STOCK_DB_PATH` не существуют — задавать их
+бесполезно. Изоляция между агентами — за счёт разного `AGENT_NAME` (давайте
+каждому агенту уникальное имя; уникальные `sku_id` тоже желательны). Через
+env можно переопределить только путь к файлу состояния, и его дефолт уже
+per-agent.
 
 ### Картинки
 

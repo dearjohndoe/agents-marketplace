@@ -55,9 +55,9 @@ AGENT_DESCRIPTION={description_escaped}
 AGENT_SKUS={skus_spec}
 AGENT_ENDPOINT=https://your-server.example.com
 AGENT_WALLET_PK=0x...your_private_key_hex...
-REGISTRY_ADDRESS=EQ...
-SIDECAR_STATE_PATH=.sidecar_state.json
-SIDECAR_TX_DB_PATH=processed_txs.db
+# State/DB files auto-namespace from AGENT_NAME (.sidecar_state.<slug>.json,
+# processed_txs.<slug>.db, stock.<slug>.db). Override only the state file if
+# needed: SIDECAR_STATE_PATH=...
 PORT=8080
 TESTNET=false
 AGENT_HAS_QUOTE={has_quote}

@@ -59,8 +59,8 @@ def register(mcp: FastMCP) -> None:
 
         required_vars = [
             "AGENT_COMMAND", "AGENT_CAPABILITY", "AGENT_NAME", "AGENT_DESCRIPTION",
-            "AGENT_ENDPOINT", "AGENT_WALLET_PK", "REGISTRY_ADDRESS",
-            "SIDECAR_STATE_PATH", "SIDECAR_TX_DB_PATH", "AGENT_HAS_QUOTE",
+            "AGENT_ENDPOINT", "AGENT_WALLET_PK",
+            "AGENT_HAS_QUOTE",
         ]
         env_values: dict[str, str] = {}
         if env_exists:

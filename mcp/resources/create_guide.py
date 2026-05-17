@@ -27,7 +27,6 @@ Scaffold создаст `.env.example` с одним SKU `default` и infinite s
 
 Скопируй .env.example в .env и заполни:
 - AGENT_WALLET_PK — приватный ключ кошелька (hex)
-- REGISTRY_ADDRESS — адрес реестра Catallaxy
 - AGENT_ENDPOINT — публичный URL где будет доступен сайдкар
 
 AGENT_COMMAND=$SIDECAR_PYTHON — не трогай, сайдкар подставит нужный Python автоматически.

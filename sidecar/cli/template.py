@@ -1,4 +1,3 @@
-_REGISTRY_ADDRESS = "UQCYxSFNCJHmBxVpgfqAesgjLQDsLch3WJG3MJYyhnBDS7gg"
 _CTLX_SUFFIX = "-ctlx-agent"
 _CAPABILITIES = ["translate", "summarize", "analyze", "generate", "classify", "qa", "code"]
 
