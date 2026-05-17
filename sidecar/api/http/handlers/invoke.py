@@ -107,9 +107,15 @@ async def _resolve_amounts(sku: AgentSku, sidecar: "SidecarApp") -> tuple[int, i
 
 
 def _apply_quote_amounts(
-    parsed: ParsedInvoke, sidecar: "SidecarApp", min_ton: int, min_usdt: int,
+    parsed: ParsedInvoke, sidecar: "SidecarApp", sku: AgentSku, min_ton: int, min_usdt: int,
 ) -> tuple[QuoteEntry | None, int, int, web.Response | None]:
-    """Override amounts from a quote entry; report quote errors."""
+    """Override amounts from a quote entry; report quote errors.
+
+    The quote override is rail-aware: ``quote_entry.price`` is only trusted as
+    ``min_ton`` when the SKU actually prices a TON rail, and ``price_usdt`` only
+    when it prices a USDT rail. Without this guard a USD-only SKU could leak
+    micro-USD into ``min_ton`` and let TON payment pass at ~1% of the price.
+    """
     if not parsed.quote_id:
         return None, min_ton, min_usdt, None
     cleanup_expired_quotes(sidecar.quotes)
@@ -122,7 +128,9 @@ def _apply_quote_amounts(
         return None, min_ton, min_usdt, web.json_response(
             {"error": "Quote is currently locked by another request"}, status=409,
         )
-    return quote_entry, quote_entry.price, quote_entry.price_usdt or min_usdt, None
+    new_min_ton = quote_entry.price if sku.price_ton is not None else min_ton
+    new_min_usdt = (quote_entry.price_usdt or min_usdt) if sku.price_usd is not None else min_usdt
+    return quote_entry, new_min_ton, new_min_usdt, None
 
 
 async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Response:
@@ -155,7 +163,7 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
             )
 
         eff_ton, eff_usd, min_ton, min_usdt = await _resolve_amounts(sku, sidecar)
-        quote_entry, min_ton, min_usdt, quote_err = _apply_quote_amounts(parsed, sidecar, min_ton, min_usdt)
+        quote_entry, min_ton, min_usdt, quote_err = _apply_quote_amounts(parsed, sidecar, sku, min_ton, min_usdt)
         if quote_err is not None:
             return quote_err
 
