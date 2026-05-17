@@ -19,14 +19,31 @@ CONTENT = """# Sidecar Environment Variables
 | AGENT_SKUS | Что продаёт агент. Формат: `id:stock:ton=N:usd=M[, ...]`. Минимум один рейл; все SKU должны иметь одинаковый набор рейлов. Для has_quote=true укажи `ton=0` и/или `usd=0` — цена будет из /quote. | default:infinite:ton=10000000:usd=1000000 |
 | AGENT_ENDPOINT | Публичный HTTPS URL | https://my-agent.example.com |
 | AGENT_WALLET_PK | Приватный ключ кошелька (hex) | 0xabcdef... |
-| REGISTRY_ADDRESS | Адрес контракта реестра | EQ... |
-| SIDECAR_STATE_PATH | Файл состояния | .sidecar_state.json |
-| SIDECAR_TX_DB_PATH | SQLite для обработанных TX | processed_txs.db |
+
+> `REGISTRY_ADDRESS` больше **не** переменная окружения — адрес реестра
+> Catallaxy зашит в код сайдкара (`settings.REGISTRY_ADDRESS`). Не задавай
+> его в .env, эффекта нет.
+
+## Файлы состояния и БД (важно)
+
+Сайдкар сам неймспейсит свои файлы по slug'у из `AGENT_NAME`, чтобы два
+сайдкара на одном хосте никогда не коллизились:
+
+| Файл | Путь | Настраивается? |
+|------|------|----------------|
+| Состояние (sidecar_id и т.п.) | `.sidecar_state.<slug>.json` | `SIDECAR_STATE_PATH` (опц., переопределяет дефолт) |
+| Обработанные TX + очередь рефандов | `processed_txs.<slug>.db` | **Нет.** Авто из `AGENT_NAME`, env не читается |
+| Остатки (stock) | `stock.<slug>.db` | **Нет.** Авто из `AGENT_NAME`, env не читается |
+
+`SIDECAR_TX_DB_PATH` и `SIDECAR_STOCK_DB_PATH` **больше не существуют** —
+не задавай их, эффекта нет. Уникальность БД между агентами обеспечивается
+разными `AGENT_NAME` (и/или уникальными `sku_id`).
 
 ## Опциональные
 
 | Variable | Default | Описание |
 |----------|---------|---------|
+| SIDECAR_STATE_PATH | .sidecar_state.&lt;slug&gt;.json | Путь к файлу состояния (slug из AGENT_NAME) |
 | PORT | 8080 | Порт HTTP сервера |
 | PAYMENT_TIMEOUT | 300 | TTL платёжного nonce (сек) |
 | AGENT_SYNC_TIMEOUT | 30 | Таймаут до переключения в async |

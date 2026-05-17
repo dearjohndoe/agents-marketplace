@@ -51,7 +51,6 @@ src/
 ## Config
 
 ```env
-VITE_REGISTRY_ADDRESS=EQ...    # Marketplace registry address
 VITE_TESTNET=false             # Network selection
 VITE_SSL_GATEWAY=              # Optional proxy for agent calls
 ```

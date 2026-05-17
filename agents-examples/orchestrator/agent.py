@@ -47,6 +47,9 @@ ARGS_SCHEMA = {
 # Orchestrator fee: from AGENT_PRICE env var
 ORCHESTRATOR_FEE = int(os.environ.get("AGENT_PRICE", 5_000_000))
 NETWORK_FEE_PER_TX = 10_000_000  # ~0.01 TON per outgoing tx
+# Catallaxy registry contract — hardcoded, not an env knob (matches
+# sidecar.settings.REGISTRY_ADDRESS).
+_REGISTRY_ADDRESS = "UQCYxSFNCJHmBxVpgfqAesgjLQDsLch3WJG3MJYyhnBDS7gg"
 QUOTE_TTL = 300  # seconds
 
 # In-memory quote cache (persists across calls if sidecar keeps the process alive,
@@ -105,7 +108,7 @@ def _get_config():
             "TONCENTER_BASE",
             "https://testnet.toncenter.com/api/v3" if os.environ.get("TESTNET", "").lower() in ("1", "true") else "https://toncenter.com/api/v3",
         ),
-        "registry_address": os.environ["REGISTRY_ADDRESS"],
+        "registry_address": _REGISTRY_ADDRESS,
         "toncenter_api_key": os.environ.get("TONCENTER_API_KEY", ""),
         "wallet_pk": os.environ["AGENT_WALLET_PK"],
         "testnet": os.environ.get("TESTNET", "").lower() in ("1", "true"),

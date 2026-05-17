@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 DEFAULT_SKU_ID = "default"
 
+REGISTRY_ADDRESS = "UQCYxSFNCJHmBxVpgfqAesgjLQDsLch3WJG3MJYyhnBDS7gg"
+
 
 def _agent_slug(agent_name: str) -> str:
     """Filesystem-safe identifier derived from AGENT_NAME.
@@ -226,7 +228,6 @@ def load_settings(env_file: str | None = None) -> Settings:
         "AGENT_DESCRIPTION",
         "AGENT_ENDPOINT",
         "AGENT_WALLET_PK",
-        "REGISTRY_ADDRESS",
     ]
     missing = [key for key in required_keys if not os.getenv(key)]
     if missing:
@@ -279,7 +280,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         agent_wallet=_derive_wallet_address(agent_wallet_pk, testnet),
         agent_wallet_pk=agent_wallet_pk,
         agent_wallet_seed=os.getenv("AGENT_WALLET_SEED"),
-        registry_address=os.environ["REGISTRY_ADDRESS"],
+        registry_address=REGISTRY_ADDRESS,
         port=int(os.getenv("PORT", "8080")),
         payment_timeout=int(os.getenv("PAYMENT_TIMEOUT", "300")),
         sync_timeout=int(os.getenv("AGENT_SYNC_TIMEOUT", "30")),

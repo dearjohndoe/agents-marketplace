@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from ..template import _CAPABILITIES, _REGISTRY_ADDRESS
+from ..template import _CAPABILITIES
 from ..wallet import _generate_wallet_keypair
 
 
@@ -122,7 +122,6 @@ def handle_init(args: argparse.Namespace, _prefill: dict[str, str] | None = None
         f"AGENT_COMMAND={agent_command}",
         f"AGENT_WALLET_PK={wallet_pk}",
         f"AGENT_WALLET_SEED={wallet_seed}",
-        f"REGISTRY_ADDRESS={_REGISTRY_ADDRESS}",
         "",
         "PORT=8080",
         "TESTNET=false",

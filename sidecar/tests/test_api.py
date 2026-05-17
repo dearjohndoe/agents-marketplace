@@ -82,6 +82,19 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     return Settings(**base)
 
 
+async def _close_app_stores(app: SidecarApp) -> None:
+    """Close every SQLite-backed store the invoke flow may have lazily opened.
+
+    ProcessedTxStore / RefundQueue auto-``init()`` on first use, so a test that
+    exercises the invoke/refund path opens connections the noop shutdown never
+    knew about. Each ``close()`` is idempotent (guards on ``_conn``), so closing
+    all three unconditionally is safe even when a store was never touched.
+    """
+    await app.stock.close()
+    await app.tx_store.close()
+    await app.refund_queue.close()
+
+
 @pytest.fixture
 def app_factory(tmp_path):
     def _make(**overrides) -> SidecarApp:
@@ -383,7 +396,7 @@ async def client(app_factory, tmp_path):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop_startup
     app.shutdown = noop_shutdown
@@ -727,7 +740,7 @@ async def test_handle_quote_enabled_returns_quote(app_factory, monkeypatch):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop  # type: ignore[method-assign]
     app.shutdown = noop_shutdown  # type: ignore[method-assign]
@@ -761,7 +774,7 @@ async def test_handle_quote_invalid_price_returns_500(app_factory, monkeypatch):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop  # type: ignore[method-assign]
     app.shutdown = noop_shutdown  # type: ignore[method-assign]
@@ -790,7 +803,7 @@ async def test_handle_quote_missing_required_body_returns_400(app_factory):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop  # type: ignore[method-assign]
     app.shutdown = noop_shutdown  # type: ignore[method-assign]
@@ -903,7 +916,7 @@ async def _stock_client(app_factory, tmp_path, initial_stock: int = 1):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop_startup  # type: ignore[method-assign]
     app.shutdown = noop_shutdown  # type: ignore[method-assign]
@@ -1048,7 +1061,7 @@ async def test_invoke_unknown_sku_returns_400(app_factory, tmp_path):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop_startup  # type: ignore[method-assign]
     app.shutdown = noop_shutdown  # type: ignore[method-assign]
@@ -1090,7 +1103,7 @@ async def _dynamic_test_client(app_factory, tmp_path, sku_ids: list[str]):
         await app.stock.init(app.settings.skus)
 
     async def noop_shutdown():
-        await app.stock.close()
+        await _close_app_stores(app)
 
     app.startup = noop_startup  # type: ignore[method-assign]
     app.shutdown = noop_shutdown  # type: ignore[method-assign]

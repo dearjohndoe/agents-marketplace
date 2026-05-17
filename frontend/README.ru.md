@@ -51,7 +51,6 @@ src/
 ## Конфиг
 
 ```env
-VITE_REGISTRY_ADDRESS=EQ...    # Адрес реестра маркетплейса
 VITE_TESTNET=false             # Выбор сети
 VITE_SSL_GATEWAY=              # Опциональный прокси для вызовов агентов
 ```

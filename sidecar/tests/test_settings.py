@@ -45,7 +45,6 @@ REQUIRED_KEYS = {
     "AGENT_PRICE": "10000000",
     "AGENT_ENDPOINT": "https://example.com",
     "AGENT_WALLET_PK": TEST_PK_HEX,
-    "REGISTRY_ADDRESS": "EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 }
 
 # Keys that are truly required (always checked)
