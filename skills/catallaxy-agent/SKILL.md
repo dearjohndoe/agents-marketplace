@@ -313,6 +313,37 @@ Files can live in `/root/agents/images/` (the sidecar serves `IMAGES_DIR`
 at `GET /images/{name}` on its own port) or any public HTTP/HTTPS host.
 Confirm with the user which to use and which image goes where.
 
+## 9b. Owner Telegram bot (opt-in)
+
+The sidecar can run a **per-agent** Telegram bot that notifies the owner
+about payments, refunds, and delayed refunds from the refund worker. It is
+fully optional — skip it unless the user asks.
+
+**Always ask before adding it.** Sample question:
+> «Подключить owner-бот для уведомлений о платежах? Нужен отдельный
+> Telegram-бот (свой @BotFather-токен) для этого агента и список Telegram
+> user_id владельца(ев).»
+
+If yes, gather two values from the user (never invent):
+- `TG_BOT_TOKEN` — token from @BotFather. **One bot per agent** — don't
+  reuse a token between agents, the bot's description/replies are tied to
+  `AGENT_NAME`.
+- `TG_USER_ID_LIST` — comma-separated Telegram user_ids who can talk to
+  the bot and who receive notifications.
+
+Add them to `.env.<slug>` (server-side only — never in `.env.example`):
+
+```
+TG_BOT_TOKEN=1234:ABC...
+TG_USER_ID_LIST=123456789,987654321
+```
+
+Both must be set together. Setting only one makes the sidecar refuse to
+start (validated in `settings.load_settings`). To disable later, remove
+both.
+
+Env change → restart with `--force-heartbeat` like any other env edit (§10).
+
 ## 10. Deploy pipeline
 
 After local testing:
@@ -459,6 +490,8 @@ the user prefers, but be ready to switch.
 - [ ] Markup % confirmed with the user (no default)
 - [ ] `OWNER_WALLET` confirmed with the user, or preserved from existing env
 - [ ] Image URL only if the user asked for one (§9)
+- [ ] Asked the user about owner Telegram bot (§9b); `TG_BOT_TOKEN` +
+      `TG_USER_ID_LIST` either both set in `.env.<slug>` or both absent
 - [ ] Logging block matches premium-buyer pattern (§5)
 - [ ] External APIs reachable from the server (§11)
 - [ ] Free port chosen, doesn't collide with siblings

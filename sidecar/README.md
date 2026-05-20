@@ -115,6 +115,14 @@ IMAGES_DIR=images           # local folder served at GET /images/{file}
 
 # Optional — owner wallet (advertised in heartbeat)
 OWNER_WALLET=EQowner...
+
+# Optional — per-agent owner Telegram bot (notifies on payments/refunds).
+# Both must be set together, or both unset (sidecar refuses to start otherwise).
+# TG_BOT_TOKEN     — token from @BotFather, unique to THIS agent
+# TG_USER_ID_LIST  — whitelisted Telegram user_ids (CSV); notifications are
+#                    pushed to each id, messages from others are ignored
+TG_BOT_TOKEN=1234:ABC...
+TG_USER_ID_LIST=123456789,987654321
 ```
 
 ### SKUs
