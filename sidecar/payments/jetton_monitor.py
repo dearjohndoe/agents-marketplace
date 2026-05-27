@@ -50,6 +50,25 @@ class JettonWalletMonitor:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
+            self._task = None
+
+    async def replace_client(self, client: LiteBalancer) -> None:
+        """Swap underlying liteserver client without losing cache state.
+
+        See WalletMonitor.replace_client for the rationale.
+        """
+        if self._task is not None:
+            self._stop.set()
+            self._force.set()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        self._stop = asyncio.Event()
+        self._force = asyncio.Event()
+        self._client = client
+        self._task = asyncio.create_task(self._loop())
 
     def force(self) -> None:
         self._force.set()

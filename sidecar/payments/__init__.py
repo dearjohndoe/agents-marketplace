@@ -1,3 +1,7 @@
+from .balancer_patch import apply_mark_error_patch as _apply_mark_error_patch
+
+_apply_mark_error_patch()
+
 from .types import (
     PaymentVerificationError,
     VerifiedPayment,

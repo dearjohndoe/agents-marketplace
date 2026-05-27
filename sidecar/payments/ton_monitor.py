@@ -41,6 +41,27 @@ class WalletMonitor:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
+            self._task = None
+
+    async def replace_client(self, client: LiteBalancer) -> None:
+        """Swap the underlying liteserver client without dropping cache state.
+
+        Used by the periodic balancer-rebuild loop. `_by_nonce` and
+        `_last_processed_lt` survive, so an inflight `verify()` only loses
+        at most one poll cycle.
+        """
+        if self._task is not None:
+            self._stop.set()
+            self._force.set()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        self._stop = asyncio.Event()
+        self._force = asyncio.Event()
+        self._client = client
+        self._task = asyncio.create_task(self._loop())
 
     def force(self) -> None:
         """Wake the monitor to poll immediately."""

@@ -67,6 +67,21 @@ class JettonPaymentVerifier:
             await self._client.close()
             self._client = None
 
+    async def rebuild_client(self) -> None:
+        """Swap LiteBalancer; jetton monitor cache survives the swap."""
+        if self._monitor is None:
+            return
+        new_client = LiteBalancer.from_network_config(self._network)
+        await new_client.connect()
+        old = self._client
+        await self._monitor.replace_client(new_client)
+        self._client = new_client
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                logger.exception("JettonPaymentVerifier.rebuild_client: old client close failed")
+
     async def verify(self, tx_hash: str, raw_nonce: str, min_amount: int | None = None) -> VerifiedPayment:
         if self._monitor is None:
             raise RuntimeError("JettonPaymentVerifier not started")

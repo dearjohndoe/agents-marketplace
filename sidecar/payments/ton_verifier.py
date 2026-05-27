@@ -49,6 +49,25 @@ class PaymentVerifier:
             await self._client.close()
             self._client = None
 
+    async def rebuild_client(self) -> None:
+        """Periodically swap the LiteBalancer to shed long-lived state.
+
+        Monitor's `_by_nonce` cache and `_last_processed_lt` are preserved,
+        so inflight verify() loses at most one poll cycle.
+        """
+        if self._monitor is None:
+            return
+        new_client = LiteBalancer.from_network_config(self._network)
+        await new_client.connect()
+        old = self._client
+        await self._monitor.replace_client(new_client)
+        self._client = new_client
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                logger.exception("PaymentVerifier.rebuild_client: old client close failed")
+
     async def verify(self, tx_hash: str, raw_nonce: str, min_amount: int | None = None) -> VerifiedPayment:
         if self._monitor is None:
             raise RuntimeError("PaymentVerifier not started")
