@@ -190,9 +190,16 @@ TESTNET=false
 AGENT_HAS_QUOTE=false
 IMAGES_DIR=/root/agents/images
 OWNER_WALLET=<ask user — don't hard-code>
-# Agent-specific keys (TonAPI, OpenAI, etc.) below — real values only in the
-# server-side .env.<slug>, never in .env.example or anything committed.
+# TONAPI_KEY is read by BOTH the sidecar (HTTP fallback for the on-chain
+# poller when liteservers misbehave — see catallaxy://spec/sidecar-env,
+# "Resilience" section) AND any agent code that calls tonapi.io directly.
+# Without it TonAPI rate-limits to ~1 RPS per IP, which on a multi-agent
+# host is not enough. Put real values only in server-side .env.<slug>.
 TONAPI_KEY=...
+# Optional sidecar resilience knobs (all have sensible defaults):
+# TONAPI_FALLBACK_DISABLED=1          # disable HTTP fallback entirely
+# BALANCER_REBUILD_INTERVAL_SEC=14400 # period of periodic LiteBalancer rebuild
+# BALANCER_REBUILD_DISABLED=1         # disable periodic rebuild
 ```
 
 **State/DB files are auto-namespaced — do not set them.** The sidecar derives

@@ -9,6 +9,7 @@ from tonutils.types import NetworkGlobalID
 
 from .jetton_monitor import JettonWalletMonitor
 from .nonce import parse_nonce
+from .tonapi_client import TonAPIClient
 from .types import PaymentVerificationError, VerifiedPayment
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class JettonPaymentVerifier:
         min_amount: int,
         payment_timeout_seconds: int,
         testnet: bool = False,
+        tonapi_client: TonAPIClient | None = None,
     ) -> None:
         self._agent_wallet = agent_wallet
         self._usdt_master = usdt_master
@@ -36,6 +38,7 @@ class JettonPaymentVerifier:
         self._client: LiteBalancer | None = None
         self._monitor: JettonWalletMonitor | None = None
         self.jetton_wallet_address: str = ""
+        self._tonapi_client = tonapi_client
 
     async def start(self) -> None:
         from tonutils.contracts.jetton.master import JettonMasterStablecoin
@@ -55,7 +58,10 @@ class JettonPaymentVerifier:
         )
 
         self._monitor = JettonWalletMonitor(
-            self._client, self._agent_wallet, self.jetton_wallet_address,
+            self._client,
+            self._agent_wallet,
+            self.jetton_wallet_address,
+            tonapi_client=self._tonapi_client,
         )
         await self._monitor.start()
 

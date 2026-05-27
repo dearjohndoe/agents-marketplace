@@ -130,6 +130,8 @@ async def shutdown(app: "SidecarApp") -> None:
     await app.verifier.close()
     if app.jetton_verifier:
         await app.jetton_verifier.close()
+    if app.tonapi_client is not None:
+        await app.tonapi_client.close()
     await app.tx_store.close()
     await app.stock.close()
     await app.refund_queue.close()

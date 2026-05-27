@@ -9,6 +9,7 @@ from tonutils.types import NetworkGlobalID
 
 from .nonce import _parse_payment_nonce, parse_nonce
 from .ton_monitor import WalletMonitor
+from .tonapi_client import TonAPIClient
 from .types import PaymentVerificationError, VerifiedPayment
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class PaymentVerifier:
         payment_timeout_seconds: int,
         enforce_comment_nonce: bool = True,
         testnet: bool = False,
+        tonapi_client: TonAPIClient | None = None,
     ) -> None:
         self._agent_wallet = agent_wallet
         self._min_amount = min_amount
@@ -33,11 +35,14 @@ class PaymentVerifier:
         self._network = NetworkGlobalID.TESTNET if testnet else NetworkGlobalID.MAINNET
         self._client: LiteBalancer | None = None
         self._monitor: WalletMonitor | None = None
+        self._tonapi_client = tonapi_client
 
     async def start(self) -> None:
         self._client = LiteBalancer.from_network_config(self._network)
         await self._client.connect()
-        self._monitor = WalletMonitor(self._client, self._agent_wallet)
+        self._monitor = WalletMonitor(
+            self._client, self._agent_wallet, tonapi_client=self._tonapi_client,
+        )
         await self._monitor.start()
         logger.info("PaymentVerifier started (testnet=%s)", self._network == NetworkGlobalID.TESTNET)
 
