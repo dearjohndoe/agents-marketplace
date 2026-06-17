@@ -78,8 +78,8 @@ class StockStore:
                 total INTEGER,           -- NULL => infinite
                 sold INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                CHECK (price_ton IS NOT NULL OR price_usd IS NOT NULL)
+                updated_at INTEGER NOT NULL
+                -- No price CHECK: FREE SKUs intentionally have both prices NULL.
             );
             CREATE TABLE IF NOT EXISTS stock_ledger (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

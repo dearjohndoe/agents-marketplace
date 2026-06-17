@@ -1,3 +1,4 @@
+import enum
 import hashlib
 import os
 import re
@@ -5,6 +6,21 @@ from dataclasses import dataclass
 
 
 DEFAULT_SKU_ID = "default"
+
+
+class SkuKind(str, enum.Enum):
+    """Pricing model of a SKU.
+
+    STATIC  — fixed price per rail (price_ton/price_usd hold the amount).
+    DYNAMIC — price resolved at runtime via the agent's `mode=prices`. Stored
+              internally as price 0 (the legacy sentinel) so all existing
+              `price == 0` dynamic checks keep working unchanged.
+    FREE    — no on-chain payment; both prices are None, no rails.
+    """
+
+    STATIC = "static"
+    DYNAMIC = "dynamic"
+    FREE = "free"
 
 REGISTRY_ADDRESS = "UQCYxSFNCJHmBxVpgfqAesgjLQDsLch3WJG3MJYyhnBDS7gg"
 
@@ -29,6 +45,7 @@ class AgentSku:
     price_ton: int | None   # nanoton, None if TON rail not supported
     price_usd: int | None   # micro-USD, None if USDT rail not supported
     initial_stock: int | None  # None => infinite (no stock tracking)
+    kind: SkuKind = SkuKind.STATIC
 
 
 @dataclass
@@ -72,6 +89,9 @@ class Settings:
     payment_rails: tuple[str, ...]
     tg_bot_token: str | None
     tg_user_ids: tuple[int, ...]
+    # Free-SKU abuse limit: max claims per client IP within the rolling window.
+    free_claim_limit: int = 1
+    free_claim_window_seconds: int = 2592000  # 30 days
 
     @property
     def capability(self) -> str:
@@ -107,14 +127,28 @@ def _derive_wallet_address(pk_hex: str, testnet: bool) -> str:
     )
 
 
-def _parse_sku_prices(price_spec: list[str], sku_id: str) -> tuple[int | None, int | None]:
-    """Parse price tokens like ['ton=1000000000', 'usd=1500000']. At least one required."""
+def _parse_sku_prices(price_spec: list[str], sku_id: str) -> tuple[int | None, int | None, SkuKind]:
+    """Parse price tokens like ['ton=1000000000', 'usd=1500000'].
+
+    Special forms:
+    - ['free']                          -> FREE SKU (no rails, no on-chain payment)
+    - 'ton=0'/'usd=0' (legacy) or 'ton=dynamic'/'usd=dynamic' -> dynamic pricing
+      on that rail; the price is resolved at runtime via the agent's mode=prices.
+      Dynamic is stored internally as price 0 for backward compatibility, so
+      'ton=dynamic' is exactly equivalent to the legacy 'ton=0'.
+
+    At least one price token is required unless the SKU is 'free'.
+    """
+    tokens = [t.strip() for t in price_spec if t.strip()]
+
+    if any(t.lower() == "free" for t in tokens):
+        if len(tokens) != 1:
+            raise RuntimeError(f"SKU '{sku_id}': 'free' cannot be combined with other price tokens")
+        return None, None, SkuKind.FREE
+
     price_ton: int | None = None
     price_usd: int | None = None
-    for token in price_spec:
-        token = token.strip()
-        if not token:
-            continue
+    for token in tokens:
         if "=" not in token:
             raise RuntimeError(f"SKU '{sku_id}': invalid price token '{token}' (expected ton=<n> or usd=<n>)")
         key, _, val = token.partition("=")
@@ -122,12 +156,15 @@ def _parse_sku_prices(price_spec: list[str], sku_id: str) -> tuple[int | None, i
         val = val.strip()
         if not val:
             raise RuntimeError(f"SKU '{sku_id}': empty value for '{key}'")
-        try:
-            ival = int(val)
-        except ValueError:
-            raise RuntimeError(f"SKU '{sku_id}': '{key}' must be integer, got '{val}'")
-        if ival < 0:
-            raise RuntimeError(f"SKU '{sku_id}': '{key}' must be >= 0 (use 0 for dynamic pricing)")
+        if val.lower() == "dynamic":
+            ival = 0  # dynamic sentinel — stored as 0 for backward compatibility
+        else:
+            try:
+                ival = int(val)
+            except ValueError:
+                raise RuntimeError(f"SKU '{sku_id}': '{key}' must be an integer or 'dynamic', got '{val}'")
+            if ival < 0:
+                raise RuntimeError(f"SKU '{sku_id}': '{key}' must be >= 0 (use 0 or 'dynamic' for dynamic pricing)")
         if key == "ton":
             price_ton = ival
         elif key == "usd":
@@ -138,7 +175,11 @@ def _parse_sku_prices(price_spec: list[str], sku_id: str) -> tuple[int | None, i
     if price_ton is None and price_usd is None:
         raise RuntimeError(f"SKU '{sku_id}': at least one of ton/usd price required")
 
-    return price_ton, price_usd
+    # Both rails priced 0 is the dynamic-pricing sentinel (same rule as the legacy
+    # has_dynamic_skus check) — kept identical so old configs behave unchanged.
+    kind = SkuKind.DYNAMIC if price_ton == 0 and price_usd == 0 else SkuKind.STATIC
+
+    return price_ton, price_usd, kind
 
 
 def _parse_tg_user_ids(raw: str) -> tuple[int, ...]:
@@ -210,19 +251,23 @@ def _parse_skus(raw_skus: str, raw_titles: str) -> tuple[AgentSku, ...]:
             if initial_stock < 0:
                 raise RuntimeError(f"SKU '{sku_id}': stock must be >= 0")
 
-        price_ton, price_usd = _parse_sku_prices(parts[2:], sku_id)
+        price_ton, price_usd, kind = _parse_sku_prices(parts[2:], sku_id)
         title = titles.get(sku_id) or sku_id
         skus.append(AgentSku(
             sku_id=sku_id, title=title,
             price_ton=price_ton, price_usd=price_usd,
-            initial_stock=initial_stock,
+            initial_stock=initial_stock, kind=kind,
         ))
 
     if not skus:
         raise RuntimeError("AGENT_SKUS is set but no valid SKU entries parsed")
 
-    # All SKUs must share the same rail set
-    rail_sets = {tuple(sorted([r for r, v in (("TON", s.price_ton), ("USD", s.price_usd)) if v is not None])) for s in skus}
+    # All paid SKUs must share the same rail set. FREE SKUs have no rails and are
+    # excluded so they can coexist with paid SKUs.
+    rail_sets = {
+        tuple(sorted([r for r, v in (("TON", s.price_ton), ("USD", s.price_usd)) if v is not None]))
+        for s in skus if s.kind is not SkuKind.FREE
+    }
     if len(rail_sets) > 1:
         raise RuntimeError(f"inconsistent_sku_rails: all SKUs must support the same set of rails, got {rail_sets}")
 
@@ -285,21 +330,24 @@ def load_settings(env_file: str | None = None) -> Settings:
     # Settings.agent_price / agent_price_usdt are derived from SKUs: min non-zero price
     # per rail. Zero is the dynamic-pricing sentinel — exclude from min, but if every
     # SKU on a rail is zero, propagate zero (keeps the rail enabled without a static price).
-    if skus[0].price_ton is None:
+    # Rails are defined by the paid SKUs; FREE SKUs (no rails) are skipped, and a fully
+    # free agent ends up with no rails and agent_price 0.
+    base = next((s for s in skus if s.kind is not SkuKind.FREE), None)
+    if base is None or base.price_ton is None:
         agent_price = 0
     else:
-        non_zero = [s.price_ton for s in skus if s.price_ton]
+        non_zero = [s.price_ton for s in skus if s.kind is not SkuKind.FREE and s.price_ton]
         agent_price = min(non_zero) if non_zero else 0
-    if skus[0].price_usd is None:
+    if base is None or base.price_usd is None:
         agent_price_usdt: int | None = None
     else:
-        non_zero_usd = [s.price_usd for s in skus if s.price_usd]
+        non_zero_usd = [s.price_usd for s in skus if s.kind is not SkuKind.FREE and s.price_usd]
         agent_price_usdt = min(non_zero_usd) if non_zero_usd else 0
 
     rails: list[str] = []
-    if skus[0].price_ton is not None:
+    if base is not None and base.price_ton is not None:
         rails.append("TON")
-    if skus[0].price_usd is not None:
+    if base is not None and base.price_usd is not None:
         rails.append("USDT")
 
     agent_name = os.environ["AGENT_NAME"]
@@ -344,6 +392,8 @@ def load_settings(env_file: str | None = None) -> Settings:
         trusted_proxy_ips=frozenset(
             ip.strip() for ip in os.getenv("TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
         ),
+        free_claim_limit=int(os.getenv("FREE_CLAIM_LIMIT", "1")),
+        free_claim_window_seconds=int(os.getenv("FREE_CLAIM_WINDOW_SECONDS", "2592000")),
         file_store_dir=os.getenv("FILE_STORE_DIR", "file_store"),
         file_store_ttl=int(os.getenv("FILE_STORE_TTL", "900")),
         images_dir=os.getenv("IMAGES_DIR", "images"),

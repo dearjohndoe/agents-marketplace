@@ -132,9 +132,11 @@ can offer N SKUs at different prices and stock levels. The frontend renders
 a per-SKU selector; `/info`, `/quote` and `/invoke` all accept a `sku` field.
 
 Format: `sku_id:stock:<price_spec>[, ...]` where `<price_spec>` is any
-combination of `ton=<nanotons>` and/or `usd=<micro-usdt>` joined with `:`.
-At least one rail is required per SKU, and **all SKUs must support the same
-set of rails** (mixing TON-only and USDT-only SKUs is rejected at startup).
+combination of `ton=<nanotons>` and/or `usd=<micro-usdt>` joined with `:`,
+or the keyword `free`. At least one rail is required per **paid** SKU, and
+**all paid SKUs must support the same set of rails** (mixing TON-only and
+USDT-only SKUs is rejected at startup). FREE SKUs have no rails and are
+exempt from that rule, so they can sit alongside paid SKUs.
 
 ```env
 # Single SKU (typical case)
@@ -143,14 +145,31 @@ AGENT_SKUS=default:infinite:ton=10000000:usd=1000000
 # Multiple SKUs with stock and titles
 AGENT_SKUS=basic:10:ton=1000000000:usd=1500000,premium:3:ton=5000000000:usd=7000000
 AGENT_SKU_TITLES=basic=Basic account,premium=Premium lvl 50
+
+# Free trial + paid plan (e.g. a VPN agent)
+AGENT_SKUS=trial:1:free,month:infinite:ton=5000000000:usd=5000000
 ```
 
 Stock: an integer is the initial inventory (decremented on each sale);
 `infinite` (or empty) disables stock tracking.
 
-Dynamic pricing: set `ton=0` and/or `usd=0` — the sidecar will call the agent
-in `mode=prices` to fetch the current price at request time (used for SKUs
-whose price depends on external state).
+Dynamic pricing: set `ton=0`/`usd=0` (legacy) or the equivalent `ton=dynamic`/
+`usd=dynamic` on **both** rails — the sidecar will call the agent in
+`mode=prices` to fetch the current price at request time (used for SKUs whose
+price depends on external state).
+
+Free products (`<price_spec>` = `free`): no on-chain payment. `/invoke` runs the
+agent directly (no 402, no `tx`/`nonce`); the agent receives `FREE=1` and
+`PAYMENT_RAIL=FREE` in its env, and `CALLER_ADDRESS` carries the caller's IP
+instead of a wallet. Abuse is bounded two ways, independently:
+
+- **Per-IP quota** — at most `FREE_CLAIM_LIMIT` claims (default `1`) per client
+  IP per `FREE_CLAIM_WINDOW_SECONDS` rolling window (default `2592000` = 30
+  days). Over the limit → `403 free_limit_reached`. IP is best-effort (set
+  `TRUSTED_PROXY_IPS` so `X-Forwarded-For` is honoured behind a reverse proxy);
+  a determined user can rotate IPs.
+- **Global cap** — the SKU's `stock` (e.g. `trial:5:free` = 5 free units total
+  across everyone). Exhausted → `409 out_of_stock`.
 
 **Legacy fallback:** if `AGENT_SKUS` is absent, the sidecar synthesizes a
 single `default` SKU from `AGENT_PRICE` (nanoTON) and/or `AGENT_PRICE_USD`

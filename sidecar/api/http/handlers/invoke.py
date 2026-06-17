@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -9,13 +10,14 @@ import aiosqlite
 from aiohttp import web
 
 from payments import parse_nonce
-from settings import AgentSku
+from settings import AgentSku, SkuKind
 
 from api.domain.invocation import create_runner
 from api.domain.pricing import resolve_sku
 from api.domain.quoting import QuoteEntry, cleanup_expired_quotes, fetch_dynamic_prices
 from api.http.multipart import parse_multipart_invoke
 from api.infra.files import cleanup_uploaded_files
+from api.infra.rate_limit import client_ip
 from api.validation import validate_body
 from api.http.handlers._invoke_helpers import (
     build_402_response,
@@ -158,6 +160,102 @@ def _monitor_healthy_for_rail(sidecar: "SidecarApp", rail: str) -> bool:
         return True
 
 
+async def _run_free_invoke(
+    request: web.Request,
+    parsed: "ParsedInvoke",
+    sku: AgentSku,
+    sidecar: "SidecarApp",
+    uploaded_files: dict[str, Path],
+    created_reservation_keys: list[str],
+) -> tuple[str | web.Response, bool]:
+    """Run a FREE SKU: no on-chain payment, but per-IP quota + global stock gates.
+
+    Returns (job_id, ownership_transferred) on success, or (error_response, False).
+    Mirrors the paid post-verify path: validate body, gate, reserve stock, run
+    the agent. Shares the caller's reservation-cleanup list and ownership flag so
+    handle_invoke's finally handles early-exit teardown.
+    """
+    missing = validate_body(parsed.payload, sidecar.args_schema, has_tx=True, uploaded_files=uploaded_files)
+    if missing:
+        return web.json_response({"error": "Missing required fields", "missing": missing}, status=400), False
+
+    ip = client_ip(request, sidecar.settings)
+    claim_ts = await sidecar.free_claims.try_claim(
+        ip, sku.sku_id,
+        limit=sidecar.settings.free_claim_limit,
+        window_seconds=sidecar.settings.free_claim_window_seconds,
+    )
+    if claim_ts is None:
+        return web.json_response(
+            {
+                "error": "free_limit_reached",
+                "sku": sku.sku_id,
+                "retry_after_seconds": sidecar.settings.free_claim_window_seconds,
+            },
+            status=403,
+        ), False
+
+    async def _rollback_claim() -> None:
+        await sidecar.free_claims.rollback_claim(ip, sku.sku_id, claim_ts)
+
+    # Global stock cap is independent of the per-IP quota (initial_stock on the SKU).
+    reservation_key: str | None = None
+    if sidecar.stock.has_tracked_stock(sku.sku_id):
+        key = uuid.uuid4().hex
+        try:
+            reserved = await sidecar.stock.reserve(sku.sku_id, key, sidecar.settings.final_timeout)
+        except Exception:
+            logger.exception("free stock.reserve failed")
+            reserved = False
+        if not reserved:
+            await _rollback_claim()
+            return web.json_response({"error": "out_of_stock", "sku": sku.sku_id}, status=409), False
+        reservation_key = key
+        created_reservation_keys.append(key)
+
+    agent_payload = build_agent_payload(parsed, sku)
+    runner = create_runner(
+        refund_user=sidecar.refund_user,
+        refund_queue=sidecar.refund_queue,
+        stock=sidecar.stock,
+        agent_command=sidecar.settings.agent_command,
+        final_timeout=sidecar.settings.final_timeout,
+        sidecar_id=sidecar.sidecar_id,
+        agent_payload=agent_payload,
+        sender=ip,
+        amount=0,
+        tx_hash="",
+        nonce="",
+        sku_id=sku.sku_id,
+        uploaded_files=uploaded_files,
+        rail="FREE",
+        reservation_key=reservation_key,
+        owner_bot=sidecar.owner_bot,
+        user_body=parsed.body,
+        free=True,
+        on_free_rollback=_rollback_claim,
+    )
+    try:
+        job_id = await sidecar.jobs.submit(runner)
+    except Exception:
+        logger.exception("jobs.submit failed for free invoke sku=%s", sku.sku_id)
+        await _rollback_claim()
+        # Outer finally releases the reservation and cleans uploaded files.
+        return web.json_response(
+            {"error": "service temporarily unavailable", "retry_after_seconds": 60}, status=503,
+        ), False
+
+    # Runner now owns uploaded_files, the reservation and the claim rollback.
+    if reservation_key:
+        try:
+            await sidecar.stock.attach_job(
+                reservation_key, job_id, extend_ttl_seconds=sidecar.settings.final_timeout,
+            )
+        except Exception:
+            logger.exception("attach_job failed (free)")
+    return job_id, True
+
+
 async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Response:
     parsed = await _parse_invoke_request(request, sidecar._file_store_dir)
     if isinstance(parsed, web.Response):
@@ -177,6 +275,14 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
         if sku_err is not None:
             return sku_err
         assert sku is not None
+
+        if sku.kind is SkuKind.FREE:
+            job_id, ownership_transferred = await _run_free_invoke(
+                request, parsed, sku, sidecar, uploaded_files, created_reservation_keys,
+            )
+            if isinstance(job_id, web.Response):
+                return job_id
+            return await wait_and_render(job_id, sidecar)
 
         if parsed.rail == "TON" and sku.price_ton is None:
             return web.json_response(

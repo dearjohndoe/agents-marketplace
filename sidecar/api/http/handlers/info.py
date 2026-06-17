@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from settings import SkuKind
+
 from api.domain.quoting import fetch_dynamic_prices, has_dynamic_skus
 
 if TYPE_CHECKING:
@@ -59,15 +61,21 @@ async def handle_info(_: web.Request, sidecar: "SidecarApp") -> web.Response:
         }
         sku_obj = sidecar._skus_by_id.get(v.sku_id)
         dp = dynamic_prices.get(v.sku_id, {})
-        is_dynamic = sku_obj is not None and sku_obj.price_ton == 0 and sku_obj.price_usd == 0
 
-        price_ton = dp.get("ton", None if is_dynamic else v.price_ton)
-        price_usd = dp.get("usd", None if is_dynamic else v.price_usd)
+        if sku_obj is not None and sku_obj.kind is SkuKind.FREE:
+            # FREE SKU: no rails, no price — just flag it. stock_left below still
+            # advertises the global cap if one is set.
+            entry["free"] = True
+        else:
+            is_dynamic = sku_obj is not None and sku_obj.price_ton == 0 and sku_obj.price_usd == 0
 
-        if price_ton is not None:
-            entry["price_ton"] = price_ton
-        if price_usd is not None:
-            entry["price_usd"] = price_usd
+            price_ton = dp.get("ton", None if is_dynamic else v.price_ton)
+            price_usd = dp.get("usd", None if is_dynamic else v.price_usd)
+
+            if price_ton is not None:
+                entry["price_ton"] = price_ton
+            if price_usd is not None:
+                entry["price_usd"] = price_usd
         if v.stock_left is not None:
             entry["stock_left"] = v.stock_left
         if v.total is not None:

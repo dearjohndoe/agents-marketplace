@@ -44,8 +44,9 @@ export function AgentItem({ agent, expanded, onToggle, locked }: Props) {
     review.resetReview()
   }
 
-  const inQuoteFlow = agent.hasQuote && ['quoted', 'paying', 'invoking', 'polling'].includes(call.status)
-  const fieldsDisabled = call.busy || (agent.hasQuote === true && call.status === 'quoted')
+  const isFree = call.selectedSku?.free === true
+  const inQuoteFlow = agent.hasQuote && !isFree && ['quoted', 'paying', 'invoking', 'polling'].includes(call.status)
+  const fieldsDisabled = call.busy || (agent.hasQuote === true && !isFree && call.status === 'quoted')
   const skuTon = call.selectedSku?.priceTon ?? agent.price
   const skuUsdt = call.selectedSku?.priceUsdt ?? agent.priceUsdt
   const quoteUsdt = call.quote?.priceUsdt ?? skuUsdt
@@ -161,7 +162,7 @@ export function AgentItem({ agent, expanded, onToggle, locked }: Props) {
             </div>
           ) : (
             <form
-              onSubmit={agent.hasQuote && call.status !== 'quoted' ? call.handleGetQuote : call.handleSubmit}
+              onSubmit={agent.hasQuote && !isFree && call.status !== 'quoted' ? call.handleGetQuote : call.handleSubmit}
               className="call-form"
             >
               {call.errorMsg && <div className="alert alert-error">{call.errorMsg}</div>}
@@ -224,7 +225,14 @@ export function AgentItem({ agent, expanded, onToggle, locked }: Props) {
                 </div>
               )}
 
-              {inQuoteFlow ? (
+              {isFree ? (
+                <button type="submit" className="btn btn-primary" disabled={submitDisabled}>
+                  {call.status === 'invoking' ? 'Calling agent…'
+                    : call.status === 'polling' ? 'Waiting for result…'
+                    : selectedSoldOut ? 'Sold out'
+                    : 'Get for free'}
+                </button>
+              ) : inQuoteFlow ? (
                 <div className="quote-actions">
                   <RailSelector
                     rails={call.paymentRails}

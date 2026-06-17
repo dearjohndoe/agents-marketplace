@@ -347,3 +347,68 @@ def test_load_settings_skus_negative_price_raises(clean_env, monkeypatch):
     monkeypatch.setenv("AGENT_SKUS", "bad:infinite:ton=-1")
     with pytest.raises(RuntimeError, match=">= 0"):
         load_settings(env_file="/nonexistent/.env")
+
+
+def test_load_settings_dynamic_keyword_equals_zero(clean_env, monkeypatch):
+    """'ton=dynamic:usd=dynamic' is a synonym for the legacy 'ton=0:usd=0'."""
+    from settings import SkuKind
+    _apply_required(monkeypatch)
+    monkeypatch.setenv("AGENT_SKUS", "premium:infinite:ton=dynamic:usd=dynamic")
+    s = load_settings(env_file="/nonexistent/.env")
+    assert s.skus[0].price_ton == 0
+    assert s.skus[0].price_usd == 0
+    assert s.skus[0].kind is SkuKind.DYNAMIC
+    assert set(s.payment_rails) == {"TON", "USDT"}
+
+
+def test_load_settings_static_sku_kind(clean_env, monkeypatch):
+    from settings import SkuKind
+    _apply_required(monkeypatch)
+    monkeypatch.setenv("AGENT_SKUS", "basic:infinite:ton=1000000")
+    s = load_settings(env_file="/nonexistent/.env")
+    assert s.skus[0].kind is SkuKind.STATIC
+
+
+def test_load_settings_free_sku(clean_env, monkeypatch):
+    from settings import SkuKind
+    _apply_required(monkeypatch)
+    monkeypatch.setenv("AGENT_SKUS", "trial:1:free")
+    s = load_settings(env_file="/nonexistent/.env")
+    assert s.skus[0].kind is SkuKind.FREE
+    assert s.skus[0].price_ton is None
+    assert s.skus[0].price_usd is None
+    assert s.skus[0].initial_stock == 1
+    # A fully-free agent advertises no rails and zero price.
+    assert s.payment_rails == ()
+    assert s.agent_price == 0
+    assert s.agent_price_usdt is None
+
+
+def test_load_settings_free_and_paid_mix(clean_env, monkeypatch):
+    """A FREE SKU coexists with paid SKUs; rails come from the paid ones."""
+    from settings import SkuKind
+    _apply_required(monkeypatch)
+    monkeypatch.setenv("AGENT_SKUS", "trial:1:free,month:infinite:ton=5000000000:usd=5000000")
+    s = load_settings(env_file="/nonexistent/.env")
+    kinds = {sku.sku_id: sku.kind for sku in s.skus}
+    assert kinds["trial"] is SkuKind.FREE
+    assert kinds["month"] is SkuKind.STATIC
+    assert set(s.payment_rails) == {"TON", "USDT"}
+    assert s.agent_price == 5_000_000_000
+
+
+def test_load_settings_free_mixed_with_price_raises(clean_env, monkeypatch):
+    _apply_required(monkeypatch)
+    monkeypatch.setenv("AGENT_SKUS", "bad:1:free:ton=1000000")
+    with pytest.raises(RuntimeError, match="free"):
+        load_settings(env_file="/nonexistent/.env")
+
+
+def test_load_settings_free_claim_env(clean_env, monkeypatch):
+    _apply_required(monkeypatch)
+    monkeypatch.setenv("AGENT_SKUS", "trial:1:free")
+    monkeypatch.setenv("FREE_CLAIM_LIMIT", "3")
+    monkeypatch.setenv("FREE_CLAIM_WINDOW_SECONDS", "86400")
+    s = load_settings(env_file="/nonexistent/.env")
+    assert s.free_claim_limit == 3
+    assert s.free_claim_window_seconds == 86400

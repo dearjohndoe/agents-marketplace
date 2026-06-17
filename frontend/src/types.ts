@@ -24,6 +24,7 @@ export interface TypedResult {
 export interface Sku {
   id: string
   title?: string
+  free?: boolean         // free product: no on-chain payment
   priceTon?: number      // nanotons
   priceUsdt?: number     // micro-USDT (6 decimals)
   stockLeft?: number     // undefined = untracked / infinite

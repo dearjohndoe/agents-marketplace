@@ -171,6 +171,28 @@ export async function invokeAgent(
   }
 }
 
+/**
+ * Invoke a FREE SKU: no on-chain payment, no preflight. The body and files are
+ * sent in one shot; the sidecar gates abuse per client IP server-side, so no
+ * extra identity is sent from here.
+ */
+export async function invokeFree(
+  endpoint: string,
+  capability: string,
+  body: Record<string, string | number | boolean>,
+  sku: string,
+  fileFields?: Record<string, File>,
+): Promise<InvokeResult> {
+  const form = buildMultipart({ capability, sku }, body, fileFields)
+  const { url, headers } = resolveUrl(endpoint, '/invoke')
+  const { data } = await axios.post(url, form, { timeout: 90000, headers })
+  return {
+    jobId: data.job_id, status: data.status,
+    result: data.result, error: data.error,
+    reason: data.reason, reasonCode: data.reason_code, refundTx: data.refund_tx,
+  }
+}
+
 export async function pollResult(endpoint: string, jobId: string): Promise<InvokeResult> {
   const { url, headers } = resolveUrl(endpoint, `/result/${jobId}`)
   const { data } = await axios.get(url, { timeout: 10000, headers })
@@ -237,6 +259,7 @@ export async function fetchAgentInfo(endpoint: string): Promise<AgentInfo> {
     ? data.skus.map((s: any) => ({
         id: String(s.id),
         title: s.title ? String(s.title) : undefined,
+        free: s.free === true ? true : undefined,
         priceTon: typeof s.price_ton === 'number' ? s.price_ton : undefined,
         priceUsdt: typeof s.price_usd === 'number' ? s.price_usd : undefined,
         stockLeft: typeof s.stock_left === 'number' ? s.stock_left : undefined,

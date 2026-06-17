@@ -20,7 +20,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import api as api_module
 from api import QuoteEntry, SidecarApp, fetch_describe, validate_body
-from settings import AgentSku, DEFAULT_SKU_ID, Settings
+from settings import AgentSku, DEFAULT_SKU_ID, Settings, SkuKind
 from payments import PaymentVerificationError, VerifiedPayment
 
 
@@ -96,6 +96,7 @@ async def _close_app_stores(app: SidecarApp) -> None:
     await app.stock.close()
     await app.tx_store.close()
     await app.refund_queue.close()
+    await app.free_claims.close()
 
 
 @pytest.fixture
@@ -1260,3 +1261,149 @@ async def test_invoke_preflight_dynamic_sku_unpriced_returns_409(app_factory, tm
         data = await resp.json()
         assert data["error"] == "out_of_stock"
         assert data["sku"] == "premium_6m"
+
+
+# ── FREE SKUs ───────────────────────────────────────────────────────────
+
+def _make_free_app(app_factory, free_skus, paid_skus=(), **overrides) -> "SidecarApp":
+    """Build a SidecarApp with FREE SKUs (and optionally paid ones alongside)."""
+    skus = tuple(free_skus) + tuple(paid_skus)
+    rails = ("TON",) if paid_skus else ()
+    app = app_factory(skus=skus, payment_rails=rails, **overrides)
+    app.args_schema = {"text": {"type": "string", "required": True}}
+    app._file_store_dir.mkdir(parents=True, exist_ok=True)
+    return app
+
+
+async def _free_test_client(app_factory, free_skus, paid_skus=(), **overrides):
+    app = _make_free_app(app_factory, free_skus, paid_skus, **overrides)
+    _force_healthy_monitors(app)
+
+    async def noop_startup():
+        app._file_store_dir.mkdir(parents=True, exist_ok=True)
+        await app.stock.init(app.settings.skus)
+        await app.free_claims.init()
+
+    async def noop_shutdown():
+        await _close_app_stores(app)
+
+    app.startup = noop_startup  # type: ignore[method-assign]
+    app.shutdown = noop_shutdown  # type: ignore[method-assign]
+    web_app = app.build_web_app()
+    web_app.on_startup.clear()
+    web_app.on_shutdown.clear()
+    web_app.on_startup.append(lambda _: noop_startup())
+    web_app.on_shutdown.append(lambda _: noop_shutdown())
+    return app, TestClient(TestServer(web_app))
+
+
+async def test_info_shows_free_sku_without_price(app_factory, tmp_path):
+    free = AgentSku(sku_id="trial", title="Free trial", price_ton=None, price_usd=None,
+                    initial_stock=None, kind=SkuKind.FREE)
+    app, tc = await _free_test_client(app_factory, [free])
+    async with tc as c:
+        resp = await c.get("/info")
+        assert resp.status == 200
+        data = await resp.json()
+        entry = next(s for s in data["skus"] if s["id"] == "trial")
+        assert entry["free"] is True
+        assert "price_ton" not in entry
+        assert "price_usd" not in entry
+
+
+async def test_free_invoke_runs_without_payment(app_factory, tmp_path, monkeypatch):
+    free = AgentSku(sku_id="trial", title="Free trial", price_ton=None, price_usd=None,
+                    initial_stock=None, kind=SkuKind.FREE)
+    app, tc = await _free_test_client(app_factory, [free])
+
+    seen_env = {}
+
+    async def fake_run(**kwargs):
+        seen_env.update(kwargs.get("env") or {})
+        return {"result": {"type": "text", "data": "trial-config"}}
+
+    monkeypatch.setattr(api_module, "run_agent_subprocess", fake_run)
+
+    async with tc as c:
+        resp = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                             "body": {"text": "hi"}})
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["result"]["data"] == "trial-config"
+    # Agent is told it's a free run; no tx hash.
+    assert seen_env.get("FREE") == "1"
+    assert seen_env.get("PAYMENT_RAIL") == "FREE"
+    assert seen_env.get("CALLER_TX_HASH") == ""
+
+
+async def test_free_invoke_second_call_same_ip_limited(app_factory, tmp_path, monkeypatch):
+    free = AgentSku(sku_id="trial", title="Free trial", price_ton=None, price_usd=None,
+                    initial_stock=None, kind=SkuKind.FREE)
+    app, tc = await _free_test_client(app_factory, [free])  # default free_claim_limit=1
+
+    async def fake_run(**kwargs):
+        return {"result": {"type": "text", "data": "ok"}}
+
+    monkeypatch.setattr(api_module, "run_agent_subprocess", fake_run)
+
+    async with tc as c:
+        first = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                              "body": {"text": "hi"}})
+        assert first.status == 200
+        second = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                               "body": {"text": "hi"}})
+        assert second.status == 403
+        data = await second.json()
+        assert data["error"] == "free_limit_reached"
+        assert data["sku"] == "trial"
+
+
+async def test_free_invoke_global_stock_cap(app_factory, tmp_path, monkeypatch):
+    # 1 free unit globally; per-IP limit doesn't matter since we use distinct IPs.
+    free = AgentSku(sku_id="trial", title="Free trial", price_ton=None, price_usd=None,
+                    initial_stock=1, kind=SkuKind.FREE)
+    app, tc = await _free_test_client(
+        app_factory, [free], trusted_proxy_ips=frozenset({"127.0.0.1"}),
+    )
+
+    async def fake_run(**kwargs):
+        return {"result": {"type": "text", "data": "ok"}}
+
+    monkeypatch.setattr(api_module, "run_agent_subprocess", fake_run)
+
+    async with tc as c:
+        a = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                          "body": {"text": "hi"}},
+                         headers={"X-Forwarded-For": "10.0.0.1"})
+        assert a.status == 200
+        b = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                          "body": {"text": "hi"}},
+                         headers={"X-Forwarded-For": "10.0.0.2"})
+        assert b.status == 409
+        data = await b.json()
+        assert data["error"] == "out_of_stock"
+
+
+async def test_free_invoke_limit_not_burned_on_agent_failure(app_factory, tmp_path, monkeypatch):
+    free = AgentSku(sku_id="trial", title="Free trial", price_ton=None, price_usd=None,
+                    initial_stock=None, kind=SkuKind.FREE)
+    app, tc = await _free_test_client(app_factory, [free])
+
+    calls = {"n": 0}
+
+    async def fake_run(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("agent boom")
+        return {"result": {"type": "text", "data": "ok"}}
+
+    monkeypatch.setattr(api_module, "run_agent_subprocess", fake_run)
+
+    async with tc as c:
+        first = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                              "body": {"text": "hi"}})
+        assert first.status == 500  # agent error surfaces
+        # Quota was rolled back — the user can retry and succeed.
+        second = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
+                                               "body": {"text": "hi"}})
+        assert second.status == 200

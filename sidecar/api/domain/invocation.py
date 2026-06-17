@@ -46,7 +46,16 @@ def create_runner(
     reservation_key: str | None = None,
     owner_bot: "OwnerBot | None" = None,
     user_body: Any = None,
+    free: bool = False,
+    on_free_rollback: "Callable[[], Awaitable[None]] | None" = None,
 ) -> Callable[[], Awaitable[dict[str, Any]]]:
+    async def _free_rollback() -> None:
+        if on_free_rollback is not None:
+            try:
+                await on_free_rollback()
+            except Exception:
+                logger.exception("free-claim rollback failed")
+
     async def runner() -> dict[str, Any]:
         try:
             raw = await api.run_agent_subprocess(
@@ -58,11 +67,28 @@ def create_runner(
                     "CALLER_ADDRESS": sender,
                     "CALLER_TX_HASH": tx_hash,
                     "PAYMENT_RAIL": rail,
+                    "FREE": "1" if free else "0",
                 },
             )
 
             if is_out_of_stock_result(raw):
                 reason = str(raw.get("reason") or "agent reported out of stock")
+                # Free run: no money changed hands, so no refund. Free up the
+                # consumed quota so the user can retry, and report unavailable.
+                if free:
+                    if reservation_key:
+                        try:
+                            await stock.agent_out_of_stock(reservation_key)
+                        except Exception:
+                            logger.exception("agent_out_of_stock bookkeeping failed")
+                    await _free_rollback()
+                    return {
+                        "result": {
+                            "status": "unavailable",
+                            "reason_code": "out_of_stock",
+                            "reason": reason,
+                        }
+                    }
                 refund_tx = await refund_or_enqueue(
                     refund_queue=refund_queue,
                     refund_user_fn=refund_user,
@@ -97,7 +123,7 @@ def create_runner(
                     await stock.commit_sold(reservation_key, tx_hash)
                 except Exception:
                     logger.exception("commit_sold failed (agent succeeded but stock bookkeeping broke)")
-            if owner_bot is not None:
+            if owner_bot is not None and not free:
                 owner_bot.notify_success(
                     sender=sender, amount=amount, rail=rail, sku_id=sku_id,
                     tx_hash=tx_hash, body=user_body,
@@ -106,6 +132,18 @@ def create_runner(
         except Exception as exc:
             reason_code = _exc_to_reason_code(exc)
             human_reason = str(exc) or reason_code
+
+            # Free run: nothing to refund. Release stock, give back the quota
+            # slot (infra failure shouldn't burn the user's free attempt), and
+            # let the error surface to the caller.
+            if free:
+                if reservation_key:
+                    try:
+                        await stock.release(reservation_key)
+                    except Exception:
+                        logger.exception("stock.release failed inside free runner")
+                await _free_rollback()
+                raise
 
             refund_tx = await refund_or_enqueue(
                 refund_queue=refund_queue,

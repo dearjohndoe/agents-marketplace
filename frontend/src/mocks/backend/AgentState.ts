@@ -32,6 +32,7 @@ export class AgentState {
   reservations = new Map<string, Reservation>()
   quotes = new Map<string, QuoteEntry>()
   jobs = new Map<string, JobRecord>()
+  freeClaims = new Map<string, number>() // skuId -> claims used (mock: single client)
   private onPersist?: () => void
 
   constructor(fx: SidecarFixture, onPersist?: () => void) {
@@ -47,6 +48,7 @@ export class AgentState {
         {
           id: s.id,
           title: s.title,
+          free: s.free,
           priceTon: s.priceTon,
           priceUsdt: s.priceUsdt,
           total: s.initialStock,
@@ -57,6 +59,7 @@ export class AgentState {
     this.reservations.clear()
     this.quotes.clear()
     this.jobs.clear()
+    this.freeClaims.clear()
     this.onPersist?.()
   }
 
@@ -132,8 +135,12 @@ export class AgentState {
     const skus = [...this.skus.values()].map(s => {
       const left = this.stockLeft(s.id)
       const entry: any = { id: s.id, title: s.title }
-      if (s.priceTon != null) entry.price_ton = s.priceTon
-      if (s.priceUsdt != null) entry.price_usd = s.priceUsdt
+      if (s.free) {
+        entry.free = true
+      } else {
+        if (s.priceTon != null) entry.price_ton = s.priceTon
+        if (s.priceUsdt != null) entry.price_usd = s.priceUsdt
+      }
       if (left != null) entry.stock_left = left
       if (s.total != null) {
         entry.total = s.total
@@ -226,6 +233,42 @@ export class AgentState {
       const r = this.resolveSku(req.sku)
       if ('error' in r) return { status: r.status, body: { error: r.error, available_skus: r.available } }
       sku = r
+    }
+
+    // ── Free SKU: no payment, per-client quota + global stock cap ──
+    if (sku.free) {
+      const used = this.freeClaims.get(sku.id) ?? 0
+      const limit = this.fx.freeClaimLimit ?? 1
+      if (used >= limit) {
+        return { status: 403, body: { error: 'free_limit_reached', sku: sku.id, retry_after_seconds: 2592000 } }
+      }
+      let freeKey: string | undefined
+      if (sku.total != null) {
+        freeKey = 'free_' + Math.random().toString(16).slice(2, 10)
+        const ok = this.reserve(sku.id, freeKey, PAYMENT_TIMEOUT_MS)
+        if (!ok) return { status: 409, body: { error: 'out_of_stock', sku: sku.id } }
+      }
+      this.freeClaims.set(sku.id, used + 1)
+
+      const outcome = this.fx.behavior({ skuId: sku.id, body: req.body, nonce: req.nonce })
+      const jobId = 'job_' + Math.random().toString(16).slice(2, 10)
+      const job: JobRecord = {
+        jobId,
+        reservationKey: freeKey ?? jobId,
+        finishAt: Date.now() + (outcome.delayMs ?? 0),
+        outcome,
+        status: 'pending',
+      }
+      this.jobs.set(jobId, job)
+      if (freeKey) {
+        const fr = this.reservations.get(freeKey)
+        if (fr) fr.jobId = jobId
+      }
+      if ((outcome.delayMs ?? 0) <= 0) {
+        this._materialise(job)
+        return { status: 200, body: this._jobResponse(job) }
+      }
+      return { status: 200, body: { job_id: jobId, status: 'pending' } }
     }
 
     const rail = (req.rail ?? 'TON').toUpperCase()

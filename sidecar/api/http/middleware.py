@@ -6,6 +6,8 @@ from aiohttp import web
 
 from settings import Settings
 
+from api.infra.rate_limit import client_ip
+
 
 def make_cors_middleware():
     @web.middleware
@@ -31,11 +33,7 @@ def make_rate_limit_middleware(settings: Settings, rate_limits: dict[str, list[f
         if request.method == "OPTIONS" or request.path == "/info" or request.path.startswith("/download/"):
             return await handler(request)
 
-        remote = request.remote or ""
-        if remote and settings.trusted_proxy_ips and remote in settings.trusted_proxy_ips:
-            ip = (request.headers.get("X-Forwarded-For") or remote).split(",")[0].strip()
-        else:
-            ip = remote or "unknown"
+        ip = client_ip(request, settings)
 
         now = time.time()
         cutoff = now - settings.rate_limit_window

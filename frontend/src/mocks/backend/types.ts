@@ -9,6 +9,7 @@ export type AgentBehavior =
 export interface SkuFixture {
   id: string
   title?: string
+  free?: boolean // free product: no on-chain payment
   priceTon?: number
   priceUsdt?: number
   initialStock: number | null // null = infinite
@@ -31,6 +32,7 @@ export interface SidecarFixture {
     images?: string[]
   }
   paymentRails: Array<'TON' | 'USDT'>
+  freeClaimLimit?: number // per-client free claims allowed (default 1)
   behavior: (req: { skuId: string; body: any; nonce: string }) => AgentBehavior
   quotePrice?: (req: { skuId: string; body: any }) => {
     price: number
@@ -46,6 +48,7 @@ export interface SidecarFixture {
 export interface SkuState {
   id: string
   title?: string
+  free?: boolean
   priceTon?: number
   priceUsdt?: number
   total: number | null

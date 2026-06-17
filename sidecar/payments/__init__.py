@@ -10,6 +10,7 @@ from .types import (
 )
 from .nonce import parse_nonce, _parse_payment_nonce
 from .processed_tx import ProcessedTxStore
+from .free_claims import FreeClaimStore
 from .refund_queue import (
     PendingRefund,
     RefundQueue,
@@ -33,6 +34,7 @@ __all__ = [
     "parse_nonce",
     "_parse_payment_nonce",
     "ProcessedTxStore",
+    "FreeClaimStore",
     "PendingRefund",
     "RefundQueue",
     "STATUS_FAILED",

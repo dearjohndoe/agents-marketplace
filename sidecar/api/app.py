@@ -12,7 +12,7 @@ from heartbeat import HeartbeatManager
 from jobs import JobStore
 from storage import StateStore
 from transfer import TransferSender
-from payments import PaymentVerifier, JettonPaymentVerifier, ProcessedTxStore, RefundQueue, TonAPIClient
+from payments import PaymentVerifier, JettonPaymentVerifier, ProcessedTxStore, RefundQueue, TonAPIClient, FreeClaimStore
 from jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
 from owner_bot import OwnerBot
 from settings import Settings, AgentSku, DEFAULT_SKU_ID  # noqa: F401 — re-exported via api package
@@ -87,6 +87,8 @@ class SidecarApp:
         # already share per-agent scoping via tx_db_path and SQLite handles the
         # two connections fine. One env var, one file to back up.
         self.refund_queue = RefundQueue(settings.tx_db_path)
+        # Per-IP FREE SKU usage accounting — same per-agent SQLite file.
+        self.free_claims = FreeClaimStore(settings.tx_db_path)
         self.stop_event = asyncio.Event()
         self.sidecar_id: str = ""
         # Dynamic pricing cache (populated via agent mode=prices when SKU price==0)

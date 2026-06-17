@@ -8,6 +8,7 @@ import { buildBody } from './flows/buildBody'
 import { runQuote } from './flows/quote'
 import { runPayment } from './flows/payment'
 import { runInvoke } from './flows/invoke'
+import { runFreeInvoke } from './flows/freeInvoke'
 import { startPolling } from './flows/pollResult'
 
 export type { CallStatus } from './types'
@@ -44,9 +45,23 @@ export function useAgentCall(
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    s.setStatus('paying'); s.setErrorMsg(''); s.setResult(null)
+    s.setErrorMsg(''); s.setResult(null)
 
     const body = buildBody(s.fields, agent.argsSchema)
+
+    // Free SKU: no payment, no rail selection — call the agent directly.
+    if (selectedSku?.free) {
+      s.setStatus('invoking')
+      const fr = await runFreeInvoke({
+        endpoint: agent.endpoint, capability, body,
+        skuId: selectedSku.id, fileFields: s.fileFields,
+      })
+      if (fr.kind === 'error') { s.setStatus('error'); s.setErrorMsg(fr.message); return }
+      applyInvokeResult(fr.value)
+      return
+    }
+
+    s.setStatus('paying')
     const pay = await runPayment({
       endpoint: agent.endpoint, capability, body,
       quoteId: s.quote?.quoteId, skuId: s.selectedSkuId || undefined,
@@ -65,7 +80,10 @@ export function useAgentCall(
     })
     if (inv.kind === 'error') { s.setStatus('error'); s.setErrorMsg(inv.message); return }
 
-    const res = inv.value
+    applyInvokeResult(inv.value)
+  }
+
+  function applyInvokeResult(res: import('../../lib/agentClient').InvokeResult) {
     if (res.status === 'done') { s.setResult(res.result); s.setStatus('done') }
     else if (res.status === 'refunded') {
       s.setRefundReason(res.reason ?? '')

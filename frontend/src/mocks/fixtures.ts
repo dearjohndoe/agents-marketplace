@@ -32,6 +32,32 @@ export const FIXTURES: SidecarFixture[] = [
     }),
   },
 
+  // ── 1b. Free trial + paid SKU (VPN-style) ───────────────────────
+  {
+    sidecarId: 'mock-stock-free',
+    endpoint: 'https://stock-free.mock.local',
+    paymentRails: ['TON'],
+    freeClaimLimit: 1,
+    agent: {
+      address: 'EQBvW8Z5huBkMJYdnfAEM5JqTNkuWX3diqYENkWsIL0Xfree',
+      name: 'VPN Demo · Free trial + paid',
+      description: 'One free trial config per client, plus a paid monthly plan.',
+      capabilities: ['vpn'],
+      argsSchema: {
+        region: { type: 'string', description: 'Preferred region', required: true },
+      },
+    },
+    skus: [
+      { id: 'trial', title: 'Free trial', free: true, initialStock: 5 },
+      { id: 'month', title: 'Monthly plan', priceTon: 5_000_000_000, initialStock: null },
+    ],
+    behavior: ({ skuId, body }) => ({
+      kind: 'success',
+      delayMs: 200,
+      result: { type: 'string', data: `${skuId} VPN config for ${body?.region ?? '??'}` },
+    }),
+  },
+
   // ── 2. Multi-SKU agent ──────────────────────────────────────────
   {
     sidecarId: 'mock-stock-multi',

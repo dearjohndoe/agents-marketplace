@@ -88,6 +88,11 @@ async def startup(app: "SidecarApp") -> None:
     except Exception:
         logger.exception("RefundQueue.init failed")
 
+    try:
+        await app.free_claims.init()
+    except Exception:
+        logger.exception("FreeClaimStore.init failed")
+
     if app.settings.tg_bot_token and app.settings.tg_user_ids:
         app.owner_bot = OwnerBot(
             token=app.settings.tg_bot_token,
@@ -135,5 +140,6 @@ async def shutdown(app: "SidecarApp") -> None:
     await app.tx_store.close()
     await app.stock.close()
     await app.refund_queue.close()
+    await app.free_claims.close()
     if app.owner_bot is not None:
         await app.owner_bot.close()

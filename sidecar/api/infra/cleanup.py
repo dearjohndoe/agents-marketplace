@@ -23,6 +23,10 @@ async def cleanup_loop(app: "SidecarApp") -> None:
         except Exception:
             logger.exception("Stock sweep failed")
         try:
+            await app.free_claims.cleanup(app.settings.free_claim_window_seconds)
+        except Exception:
+            logger.exception("Free-claims cleanup failed")
+        try:
             await asyncio.wait_for(app.stop_event.wait(), timeout=60)
         except asyncio.TimeoutError:
             pass

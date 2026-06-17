@@ -25,9 +25,13 @@ export function SkuSelector({ skus, selectedId, onSelect, disabled }: {
             >
               <span className="sku-title">{s.title || s.id}</span>
               <span className="sku-price">
-                {s.priceTon != null && <span className="price-ton">{nanoToTon(s.priceTon)} TON</span>}
-                {s.priceTon != null && s.priceUsdt != null && <span className="price-sep"> / </span>}
-                {s.priceUsdt != null && <span className="price-usdt">{microToUsdt(s.priceUsdt)} USDT</span>}
+                {s.free
+                  ? <span className="price-free">Free</span>
+                  : <>
+                      {s.priceTon != null && <span className="price-ton">{nanoToTon(s.priceTon)} TON</span>}
+                      {s.priceTon != null && s.priceUsdt != null && <span className="price-sep"> / </span>}
+                      {s.priceUsdt != null && <span className="price-usdt">{microToUsdt(s.priceUsdt)} USDT</span>}
+                    </>}
               </span>
               <span className="sku-stock">
                 {soldOut ? 'Sold out'
