@@ -85,13 +85,13 @@ async def handle_info(_: web.Request, sidecar: "SidecarApp") -> web.Response:
     if skus_payload:
         info["skus"] = skus_payload
 
-    from heartbeat import _valid_image_url
+    from chains.ton.heartbeat import _valid_image_url
     if settings.agent_preview_url and _valid_image_url(settings.agent_preview_url):
         info["preview_url"] = settings.agent_preview_url
     if settings.agent_avatar_url and _valid_image_url(settings.agent_avatar_url):
         info["avatar_url"] = settings.agent_avatar_url
     if settings.agent_images:
-        from heartbeat import MAX_IMAGES
+        from chains.ton.heartbeat import MAX_IMAGES
         images = [img for img in settings.agent_images if _valid_image_url(img)]
         if images:
             info["images"] = images[:MAX_IMAGES]

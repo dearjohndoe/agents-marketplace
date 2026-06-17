@@ -334,7 +334,7 @@ async def _check_balance_for_refund(
                 from tonutils.contracts.jetton.wallet import JettonWalletStablecoin
                 wallet = await JettonWalletStablecoin.from_address(client, app._agent_jetton_wallet)
                 balance = int(wallet.jetton_balance)
-                from jetton import USDT_REFUND_FEE
+                from chains.ton.jetton import USDT_REFUND_FEE
                 required = max(entry.amount - USDT_REFUND_FEE, 0)
                 if balance < required:
                     return False, f"jetton balance {balance} < required {required}"

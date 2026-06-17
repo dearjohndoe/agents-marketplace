@@ -25,10 +25,10 @@ from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer
 
 import api as api_module
-import transfer as transfer_module
+import chains.ton.transfer as transfer_module
 from api import SidecarApp
 from settings import AgentSku, DEFAULT_SKU_ID, Settings
-from transfer import TransferSender
+from chains.ton.transfer import TransferSender
 from payments import PaymentVerificationError, ProcessedTxStore, VerifiedPayment
 
 
@@ -387,7 +387,7 @@ async def test_heartbeat_loop_respects_configured_interval(tmp_state_path):
     Expected behaviour: the loop's wait timeout should be derived from
     ``self._interval`` (or at least a documented fraction of it).
     """
-    from heartbeat import HeartbeatConfig, HeartbeatManager
+    from chains.ton.heartbeat import HeartbeatConfig, HeartbeatManager
     from storage import StateStore
     import inspect
 
@@ -1223,7 +1223,7 @@ async def test_find_existing_refund_tx_matches_ton_comment(tmp_path):
     by matching (tx, sidecar_id) — reason and other fields are ignored."""
     from unittest.mock import MagicMock
     from api.domain.refund import find_existing_refund_tx
-    from transfer import refund_body
+    from chains.ton.transfer import refund_body
 
     body = refund_body("paid-tx-hash", "out_of_stock", "sid-test")
     # Fake out_msg/tx objects mirroring tonutils' shape: tx.out_msgs, msg.body,

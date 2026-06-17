@@ -4,8 +4,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from jetton import JETTON_TRANSFER_OPCODE, USDT_REFUND_FEE
-from transfer import REFUND_OPCODE, TransferSender, refund_body
+from chains.ton.jetton import JETTON_TRANSFER_OPCODE, USDT_REFUND_FEE
+from chains.ton.transfer import REFUND_OPCODE, TransferSender, refund_body
 
 if TYPE_CHECKING:
     from payments.refund_queue import RefundQueue

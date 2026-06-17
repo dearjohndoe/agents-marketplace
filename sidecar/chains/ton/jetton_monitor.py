@@ -4,31 +4,36 @@ import asyncio
 import logging
 import time
 
-from pytoniq_core import Transaction
 from tonutils.clients import LiteBalancer
 
-from .nonce import _parse_payment_nonce
-from .tonapi_client import TonAPIClient, TonAPIRateLimitError
+from chains.ton.jetton import parse_transfer_notification
+
+from payments.nonce import _parse_payment_nonce
+from payments.tonapi_client import TonAPIClient, TonAPIRateLimitError
+from payments.types import JettonPaymentTx
 
 logger = logging.getLogger(__name__)
 
 
-class WalletMonitor:
-    """Background worker that polls the agent wallet and caches txs by comment nonce."""
+class JettonWalletMonitor:
+    """Background worker that polls the agent wallet for incoming jetton
+    transfer_notification messages and caches them by payment nonce."""
 
-    CACHE_TTL = 600  # seconds — evict transactions older than this
+    CACHE_TTL = 600
 
     def __init__(
         self,
         client: LiteBalancer,
-        address: str,
+        agent_address: str,
+        jetton_wallet_address: str,
         poll_interval: int = 30,
         tonapi_client: TonAPIClient | None = None,
     ) -> None:
         self._client = client
-        self._address = address
+        self._address = agent_address
+        self._jetton_wallet = jetton_wallet_address
         self._poll_interval = poll_interval
-        self._by_nonce: dict[str, Transaction] = {}
+        self._by_nonce: dict[str, JettonPaymentTx] = {}
         self._force = asyncio.Event()
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
@@ -39,12 +44,12 @@ class WalletMonitor:
         self._last_loop_tick: float = 0.0
 
     async def start(self) -> None:
-        await self._poll()  # populate cache immediately before accepting requests
+        await self._poll()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
         self._stop.set()
-        self._force.set()  # wake up the loop so it exits promptly
+        self._force.set()
         if self._task:
             self._task.cancel()
             try:
@@ -54,11 +59,9 @@ class WalletMonitor:
             self._task = None
 
     async def replace_client(self, client: LiteBalancer) -> None:
-        """Swap the underlying liteserver client without dropping cache state.
+        """Swap underlying liteserver client without losing cache state.
 
-        Used by the periodic balancer-rebuild loop. `_by_nonce` and
-        `_last_processed_lt` survive, so an inflight `verify()` only loses
-        at most one poll cycle.
+        See WalletMonitor.replace_client for the rationale.
         """
         if self._task is not None:
             self._stop.set()
@@ -74,33 +77,22 @@ class WalletMonitor:
         self._task = asyncio.create_task(self._loop())
 
     def force(self) -> None:
-        """Wake the monitor to poll immediately."""
         self._force.set()
 
     def is_healthy(self, max_age_seconds: float = 120.0) -> bool:
-        """Has a successful poll completed within the staleness window?
-
-        Used by the invoke handler (plan D) to return 503 on preflight when
-        the monitor is degraded, so callers don't pay before the sidecar
-        can possibly see their tx.
-        """
+        """See WalletMonitor.is_healthy."""
         if self._last_successful_poll_at == 0.0:
             return False
         return (time.time() - self._last_successful_poll_at) < max_age_seconds
 
-    async def get(self, nonce: str) -> Transaction | None:
+    async def get(self, nonce: str) -> JettonPaymentTx | None:
         return self._by_nonce.get(nonce.strip())
 
-    async def consume(self, nonce: str) -> Transaction | None:
-        """Atomically get and remove a cached transaction by nonce."""
+    async def consume(self, nonce: str) -> JettonPaymentTx | None:
         return self._by_nonce.pop(nonce.strip(), None)
 
     def _ingest_txs(self, txs, cutoff: float, new_lt_watermark: int) -> int:
-        """Process a batch of txs, update _by_nonce, return new watermark.
-
-        Stops at the first tx with lt <= _last_processed_lt or now < cutoff
-        (txs are assumed newest-first).
-        """
+        """Process a batch of txs (newest-first). Returns updated watermark."""
         for tx in txs:
             if tx.lt <= self._last_processed_lt:
                 break
@@ -110,13 +102,33 @@ class WalletMonitor:
                 new_lt_watermark = tx.lt
             if tx.in_msg is None:
                 continue
-            comment = _parse_payment_nonce(tx.in_msg.body)
-            if comment:
-                self._by_nonce[comment.strip()] = tx
+
+            try:
+                src = tx.in_msg.info.src.to_str(
+                    is_user_friendly=True, is_bounceable=False,
+                )
+            except Exception:
+                continue
+            if src != self._jetton_wallet:
+                continue
+
+            notification = parse_transfer_notification(tx.in_msg.body)
+            if notification is None:
+                continue
+
+            nonce = _parse_payment_nonce(notification.forward_payload)
+            if not nonce:
+                continue
+
+            self._by_nonce[nonce.strip()] = JettonPaymentTx(
+                tx=tx,
+                amount=notification.amount,
+                sender=notification.sender,
+                nonce=nonce,
+            )
         return new_lt_watermark
 
     async def _poll_adnl(self, cutoff: float, new_lt_watermark: int) -> int:
-        """Walk the agent's tx history via LiteBalancer. Raises on transport errors."""
         current_lt: int | None = None
         while True:
             kwargs: dict = {"limit": 50}
@@ -135,7 +147,6 @@ class WalletMonitor:
         return new_lt_watermark
 
     async def _poll_tonapi(self, cutoff: float, new_lt_watermark: int) -> int:
-        """Single-shot fetch via TonAPI HTTP (plan C fallback)."""
         assert self._tonapi_client is not None
         txs = await self._tonapi_client.get_account_transactions(self._address, limit=50)
         if txs:
@@ -156,35 +167,31 @@ class WalletMonitor:
                 self._consecutive_lite_errors += 1
                 if self._tonapi_client is None:
                     logger.warning(
-                        "WalletMonitor: ADNL fetch failed (%s); no TonAPI fallback configured",
-                        e,
+                        "JettonWalletMonitor: ADNL fetch failed (%s); no TonAPI fallback", e,
                     )
                 else:
                     logger.warning(
-                        "WalletMonitor: ADNL fetch failed (%s); falling back to TonAPI", e,
+                        "JettonWalletMonitor: ADNL fetch failed (%s); falling back to TonAPI", e,
                     )
                     try:
                         new_lt_watermark = await self._poll_tonapi(cutoff, new_lt_watermark)
                         tonapi_ok = True
-                        logger.info("WalletMonitor: TonAPI fallback poll succeeded")
+                        logger.info("JettonWalletMonitor: TonAPI fallback poll succeeded")
                     except TonAPIRateLimitError as rl:
-                        # Expected when the shared TONAPI_KEY hits its burst
-                        # limit — TonAPIClient sets a 60s cooldown and we just
-                        # back off; no traceback noise needed.
-                        logger.warning("WalletMonitor: TonAPI fallback %s", rl)
+                        logger.warning("JettonWalletMonitor: TonAPI fallback %s", rl)
                     except Exception:
-                        logger.exception("WalletMonitor: TonAPI fallback failed too")
+                        logger.exception("JettonWalletMonitor: TonAPI fallback failed too")
         finally:
             if new_lt_watermark > self._last_processed_lt:
                 self._last_processed_lt = new_lt_watermark
             if adnl_ok or tonapi_ok:
                 self._last_successful_poll_at = time.time()
-            for k, tx in list(self._by_nonce.items()):
-                if tx.now < cutoff:
+            for k, entry in list(self._by_nonce.items()):
+                if entry.tx.now < cutoff:
                     del self._by_nonce[k]
 
     async def _loop(self) -> None:
-        cooldown = 2.0  # minimum seconds between polls to prevent LiteServer spam
+        cooldown = 2.0
         poll_hard_timeout = max(self._poll_interval * 3, 30)
         while not self._stop.is_set():
             self._last_loop_tick = time.time()
@@ -195,20 +202,18 @@ class WalletMonitor:
                 pass
             if self._stop.is_set():
                 break
-
             start_ts = time.time()
             try:
                 await asyncio.wait_for(self._poll(), timeout=poll_hard_timeout)
             except asyncio.TimeoutError:
                 logger.warning(
-                    "WalletMonitor: _poll hard timeout after %ss, skipping cycle",
+                    "JettonWalletMonitor: _poll hard timeout after %ss, skipping cycle",
                     poll_hard_timeout,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("WalletMonitor: _poll raised, loop continues")
-
+                logger.exception("JettonWalletMonitor: _poll raised, loop continues")
             elapsed = time.time() - start_ts
             if elapsed < cooldown:
                 await asyncio.sleep(cooldown - elapsed)

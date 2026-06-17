@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-from .types import JettonPaymentTx
+from payments.types import JettonPaymentTx
 
 logger = logging.getLogger(__name__)
 

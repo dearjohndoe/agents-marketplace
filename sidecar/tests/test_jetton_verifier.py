@@ -23,8 +23,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytoniq_core import Cell, begin_cell
 
-from jetton import TRANSFER_NOTIFICATION_OPCODE
-from transfer import PAYMENT_OPCODE
+from chains.ton.jetton import TRANSFER_NOTIFICATION_OPCODE
+from chains.ton.transfer import PAYMENT_OPCODE
 from payments import (
     JettonPaymentTx,
     JettonPaymentVerifier,

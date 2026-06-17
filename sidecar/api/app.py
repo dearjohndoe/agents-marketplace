@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any
 from aiohttp import web
 
-from heartbeat import HeartbeatManager
+from chains.ton.heartbeat import HeartbeatManager
 from jobs import JobStore
 from storage import StateStore
-from transfer import TransferSender
+from chains.ton.transfer import TransferSender
 from payments import PaymentVerifier, JettonPaymentVerifier, ProcessedTxStore, RefundQueue, TonAPIClient, FreeClaimStore
-from jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
+from chains.ton.jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
 from owner_bot import OwnerBot
 from settings import Settings, AgentSku, DEFAULT_SKU_ID  # noqa: F401 — re-exported via api package
 from stock import StockStore

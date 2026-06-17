@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from transfer import PAYMENT_OPCODE
+from chains.ton.transfer import PAYMENT_OPCODE
 
 from .types import NonceMeta
 

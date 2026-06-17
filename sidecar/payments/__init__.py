@@ -20,10 +20,13 @@ from .refund_queue import (
     STATUS_REFUNDED,
     STATUS_REFUNDING,
 )
-from .ton_monitor import WalletMonitor
-from .ton_verifier import PaymentVerifier
-from .jetton_monitor import JettonWalletMonitor
-from .jetton_verifier import JettonPaymentVerifier
+# Payment engines moved to chains/ton/ in step 0 of the multichain refactor
+# (MULTICHAIN_PLAN.md §3). Re-exported here so existing `from payments import …`
+# call sites keep working unchanged during the transition.
+from chains.ton.ton_monitor import WalletMonitor
+from chains.ton.ton_verifier import PaymentVerifier
+from chains.ton.jetton_monitor import JettonWalletMonitor
+from chains.ton.jetton_verifier import JettonPaymentVerifier
 from .tonapi_client import TonAPIClient, TonAPIError, TonAPIRateLimitError
 
 __all__ = [

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
+from chains.ton.jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
 from payments import PaymentVerificationError
 from settings import AgentSku
 

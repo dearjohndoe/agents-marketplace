@@ -7,11 +7,11 @@ import time
 from tonutils.clients import LiteBalancer
 from tonutils.types import NetworkGlobalID
 
-from .nonce import _parse_payment_nonce, parse_nonce
+from payments.nonce import _parse_payment_nonce, parse_nonce
 from .remote_monitor import RemoteWalletMonitor, _RelayClient, get_relay_url
 from .ton_monitor import WalletMonitor
-from .tonapi_client import TonAPIClient
-from .types import PaymentVerificationError, VerifiedPayment
+from payments.tonapi_client import TonAPIClient
+from payments.types import PaymentVerificationError, VerifiedPayment
 
 logger = logging.getLogger(__name__)
 
