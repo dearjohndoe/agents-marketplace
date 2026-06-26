@@ -1,14 +1,9 @@
-"""Characterization tests for api.domain.refund_worker.
+"""Tests for the refund background-worker state machine: every branch of
+``_process_entry`` and the per-rail ``_recover_payment_info``.
 
-These pin the refund background-worker state machine and its per-rail dispatch
-*before* the multichain refactor (which replaces the ``entry.rail == "USDT"``
-string branching with ChainRail-object dispatch). Behaviour must stay
-bit-for-bit identical across that move, so every branch of ``_process_entry``
-and ``_recover_payment_info`` is locked here.
-
-On-chain touchpoints (``refund_user``, ``find_existing_refund_tx``,
-``_check_balance_for_refund``, ``_acquire_lite_client``) are patched at the
-module level — these tests are about the worker's control flow, not RPC.
+On-chain touchpoints (``app.refund_user``, ``find_existing_refund_tx``,
+``_check_balance_for_refund``, ``_acquire_lite_client``) are mocked — these
+tests exercise the worker's control flow, not RPC.
 """
 
 from __future__ import annotations

@@ -437,7 +437,7 @@ def test_load_settings_free_claim_env(clean_env, monkeypatch):
     assert s.free_claim_window_seconds == 86400
 
 
-# ── per-chain env aliases (TON_*) with legacy fallback (MULTICHAIN §3) ──
+# ── per-chain env aliases (TON_*) with legacy fallback ──────────────────
 
 TEST_PK_HEX_ALT = "b" * 64
 
@@ -488,7 +488,7 @@ def test_ton_refund_fee_alias_overrides_and_falls_back(clean_env, monkeypatch):
     assert load_settings(env_file="/nonexistent/.env").refund_fee_nanoton == 888
 
 
-# ── AgentSku rail-price mapping (MULTICHAIN §3) ────────────────────────
+# ── AgentSku rail-price mapping ─────────────────────────────────────────
 
 def _sku(price_ton, price_usd):
     from settings import AgentSku, DEFAULT_SKU_ID

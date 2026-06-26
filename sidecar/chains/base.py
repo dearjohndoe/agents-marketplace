@@ -1,17 +1,8 @@
-"""Target interfaces for the multichain refactor (MULTICHAIN_PLAN.md §2).
+"""Chain-agnostic payment + discovery interfaces.
 
-THIN BEACON — orientation only. This file defines the *shape* the existing TON
-code (and the future Solana code) should converge on; it is intentionally not
-wired into anything yet. The concrete TON rail moves under ``chains/ton/`` and
-gets wrapped to satisfy these Protocols in a later step, at which point these
-signatures get refined against what the real code actually needs. Don't grow
-behaviour here.
-
-Key principle (plan §2): discovery and payments are independent layers.
-- A *rail* is a ``(chain, asset)`` pair identified by ``rail_id``:
-  ``"ton"``, ``"ton:usdt"``, ``"sol"``, ``"sol:usdc"``.
-- An agent advertises any set of rails, independent of which registries it
-  heartbeats into.
+A *rail* is a ``(chain, asset)`` pair identified by ``rail_id`` — e.g. "TON",
+"USDT" (both on the TON chain), later "sol"/"sol:usdc". An agent advertises any
+set of rails independently of which registries it heartbeats into.
 """
 
 from __future__ import annotations
@@ -21,13 +12,9 @@ from typing import Any, Protocol, runtime_checkable
 from payments.types import VerifiedPayment
 
 
-# ── chain namespacing (MULTICHAIN_PLAN.md §3) ──────────────────────────
-#
 # Persisted tx identifiers (processed_txs dedup keys, refund_queue PKs, and the
-# refund memo's "tx" field) are namespaced ``{chain}:{tx_hash}`` so a TON hash
-# and a Solana signature can never collide. The chain is derived from the rail:
-# TON-native and USDT-on-TON both settle on "ton".
-
+# refund memo's "tx" field) are namespaced ``{chain}:{tx_hash}`` so identifiers
+# from different chains can never collide. Both TON rails settle on "ton".
 _RAIL_TO_CHAIN = {"TON": "ton", "USDT": "ton"}
 
 
@@ -37,10 +24,9 @@ def chain_for_rail(rail_id: str) -> str:
 
 
 def namespaced_tx_key(chain: str, tx_hash: str) -> str:
-    """``{chain}:{tx_hash}``. Idempotent: an already-namespaced value (one that
-    contains ``:`` — bare TON hashes / Solana sigs never do) is returned as-is,
-    so wrapping twice is a safe no-op. Migration of legacy bare keys treats them
-    as ``ton:`` (see the stores' ``init``)."""
+    """``{chain}:{tx_hash}``. Idempotent: a value already containing ``:`` (bare
+    TON hashes / Solana sigs never do) is returned unchanged, so wrapping twice
+    is a safe no-op."""
     if ":" in tx_hash:
         return tx_hash
     return f"{chain}:{tx_hash}"
@@ -49,16 +35,9 @@ def namespaced_tx_key(chain: str, tx_hash: str) -> str:
 @runtime_checkable
 class ChainRail(Protocol):
     """One payment rail: verify an incoming payment, refund it, describe itself
-    in a 402 response, and report monitor freshness for the Plan-D health gate.
+    in a 402 response, and report monitor freshness for the health gate."""
 
-    Maps onto today's code as follows (to be unified during the wrap step):
-    - ``verify``         ← ``PaymentVerifier.verify`` / ``JettonPaymentVerifier.verify``
-    - ``refund``         ← the per-rail refund send (formerly refund_user's branch)
-    - ``payment_option`` ← the per-rail dict built in ``_invoke_helpers.build_402_response``
-    - ``monitor_healthy``← ``*Verifier.is_healthy``
-    """
-
-    #: Stable rail identifier, e.g. "ton", "ton:usdt", "sol:usdc".
+    #: Stable rail identifier, e.g. "TON", "USDT", "sol:usdc".
     rail_id: str
 
     async def verify(self, proof: str, nonce: str, min_amount: int) -> VerifiedPayment:
@@ -92,18 +71,13 @@ class ChainRail(Protocol):
 
     def monitor_healthy(self, max_age_seconds: float = 60.0) -> bool:
         """True iff this rail's monitor had a fresh successful poll within
-        ``max_age_seconds`` — gates whether we advertise the rail (plan D).
-        """
+        ``max_age_seconds`` — gates whether we advertise the rail."""
         ...
 
 
 @runtime_checkable
 class ChainRegistry(Protocol):
-    """Publishes heartbeats so the agent is discoverable on a chain's registry.
-
-    Maps onto today's ``HeartbeatManager`` (TON). Solana's registry writes a
-    transfer + Memo ``CTLX:REG:`` per plan §5.2.
-    """
+    """Publishes heartbeats so the agent is discoverable on a chain's registry."""
 
     async def publish_heartbeat(self, payload: dict[str, Any]) -> str:
         """Publish ``payload`` to the registry; returns the registry tx id."""

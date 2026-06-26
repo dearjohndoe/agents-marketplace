@@ -333,7 +333,7 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
             unlock_quote(parsed.quote_id, sidecar)
             return web.json_response({"error": "Nonce sidecar_id mismatch"}, status=402)
 
-        # Chain-namespaced storage key for this tx (MULTICHAIN_PLAN.md §3).
+        # Chain-namespaced storage key for this tx.
         tx_key = namespaced_tx_key(chain_for_rail(parsed.rail), parsed.tx_hash)
         if await sidecar.tx_store.is_processed(tx_key):
             unlock_quote(parsed.quote_id, sidecar)

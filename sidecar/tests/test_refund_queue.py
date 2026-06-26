@@ -1,11 +1,6 @@
-"""Characterization tests for payments.refund_queue.RefundQueue.
-
-Pins the SQLite-backed state machine — enqueue idempotency, atomic claim,
-due-selection, and every status transition — plus the fields the refactor
-relies on (``rail``, ``force_refund``). This is the contract that must survive
-the planned ``tx_hash`` → ``{chain}:{tx_id}`` key namespacing migration: the
-migration is only safe if current dedup/transition behaviour is locked first.
-"""
+"""Tests for payments.refund_queue.RefundQueue — the SQLite-backed state
+machine: enqueue idempotency, atomic claim, due-selection, every status
+transition, and the ``rail`` / ``force_refund`` fields."""
 
 from __future__ import annotations
 

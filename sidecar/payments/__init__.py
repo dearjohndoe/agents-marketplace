@@ -20,9 +20,8 @@ from .refund_queue import (
     STATUS_REFUNDED,
     STATUS_REFUNDING,
 )
-# Payment engines moved to chains/ton/ in step 0 of the multichain refactor
-# (MULTICHAIN_PLAN.md §3). Re-exported here so existing `from payments import …`
-# call sites keep working unchanged during the transition.
+# TON payment engines live in chains/ton/; re-exported here so `from payments
+# import …` call sites keep working.
 from chains.ton.ton_monitor import WalletMonitor
 from chains.ton.ton_verifier import PaymentVerifier
 from chains.ton.jetton_monitor import JettonWalletMonitor

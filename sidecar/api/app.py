@@ -107,10 +107,9 @@ class SidecarApp:
         # None when TG_BOT_TOKEN / TG_USER_ID_LIST aren't set.
         self.owner_bot: OwnerBot | None = None
 
-        # Payment rails (multichain refactor). Adapters over the verifiers/sender
-        # above; the handlers iterate these instead of branching on "TON"/"USDT".
-        # Late-bound state (verifier instance, agent jetton wallet, sidecar_id)
-        # is read through callables since it's created/loaded after __init__.
+        # Payment rails, keyed by rail id. Late-bound state (verifier instance,
+        # agent jetton wallet, sidecar_id) is read through callables since it's
+        # created/loaded after __init__.
         usdt_master = USDT_MASTER_TESTNET if settings.testnet else USDT_MASTER_MAINNET
         self.rails: dict[str, ChainRail] = {
             "TON": TonRail(

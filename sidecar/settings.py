@@ -47,10 +47,8 @@ class AgentSku:
     initial_stock: int | None  # None => infinite (no stock tracking)
     kind: SkuKind = SkuKind.STATIC
 
-    # rail_id -> price. Generalizes the per-field price_ton/price_usd to a
-    # rail-keyed mapping (MULTICHAIN_PLAN.md §3) so rail-agnostic code (e.g. the
-    # /invoke rail guard) needn't branch on "TON"/"USDT". The two fields remain
-    # the backing store; Solana rails extend this map without new fields.
+    # rail_id -> price accessors over the price_ton/price_usd backing fields, so
+    # rail-agnostic code needn't branch on "TON"/"USDT".
     def price_for(self, rail_id: str) -> int | None:
         """Price on ``rail_id`` (nanoton for TON, micro-USD for USDT), or None
         if the rail isn't priced. A price of 0 is the dynamic-pricing sentinel."""
@@ -124,13 +122,9 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _chain_env(chain: str, suffix: str, *legacy: str, default: str | None = None) -> str | None:
-    """Read a chain-scoped env var (MULTICHAIN_PLAN.md §3).
-
-    Prefers the per-chain name ``{CHAIN}_{SUFFIX}`` (e.g. ``TON_WALLET_PK``) and
-    falls back to the legacy unprefixed names for backward compatibility, so
-    existing deployments keep working. Returns ``default`` if none are set.
-    When Solana lands it reads the same way under ``SOL_*``.
-    """
+    """Read a chain-scoped env var, preferring the per-chain name
+    ``{CHAIN}_{SUFFIX}`` (e.g. ``TON_WALLET_PK``) and falling back to the legacy
+    unprefixed names. Returns ``default`` if none are set."""
     val = os.getenv(f"{chain.upper()}_{suffix}")
     if val is not None:
         return val

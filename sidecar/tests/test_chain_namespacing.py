@@ -1,8 +1,5 @@
-"""Tests for chain-namespaced tx keys (MULTICHAIN_PLAN.md §3).
-
-Locks the helper semantics and the legacy-key migrations so the
-``{chain}:{tx_hash}`` keying in processed_txs / refund_queue stays correct.
-"""
+"""Chain-namespaced tx keys: helper semantics + the legacy-key migrations that
+keep ``{chain}:{tx_hash}`` keying correct in processed_txs / refund_queue."""
 
 from __future__ import annotations
 

@@ -1,11 +1,6 @@
-"""Characterization tests for api.domain.refund.
-
-Locks the per-rail refund dispatch (``refund_user``: TON ``send`` vs USDT
-``send_jetton`` with their distinct fee math), the direct-then-enqueue fallback
-(``refund_or_enqueue``), and the on-chain dedup scan (``find_existing_refund_tx``)
-before the multichain refactor turns ``rail == "USDT"`` branching into
-ChainRail-object dispatch.
-"""
+"""Tests for api.domain.refund: the direct-then-enqueue fallback
+(``refund_or_enqueue``) and the on-chain dedup scan (``find_existing_refund_tx``).
+Per-rail refund sending lives in the ChainRail adapters (test_rails_ton.py)."""
 
 from __future__ import annotations
 
@@ -17,10 +12,6 @@ import pytest
 from chains.ton.transfer import refund_body
 from api.domain.refund import find_existing_refund_tx, refund_or_enqueue
 from payments.refund_queue import RefundQueue
-
-# NOTE: per-rail refund sending (the old ``refund_user``) moved to the ChainRail
-# adapters; its characterization now lives in tests/test_rails_ton.py. What
-# stays here is the rail-agnostic orchestration.
 
 
 # ── refund_or_enqueue ──────────────────────────────────────────────────

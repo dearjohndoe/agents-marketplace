@@ -1,9 +1,4 @@
-"""USDT-on-TON rail — ChainRail adapter over the jetton payment engine.
-
-Companion to ``rail_ton.TonRail`` (see that module's header). Wraps
-``JettonPaymentVerifier`` + the USDT branch of ``refund_user`` +
-``build_402_response``'s USDT option into a ``chains.base.ChainRail``. Not yet
-wired into handlers (step 4). Behaviour is bit-for-bit with today's USDT paths.
+"""USDT-on-TON rail — ChainRail over the jetton payment engine.
 
 The agent's jetton wallet is bootstrapped lazily (``ensure_jetton_verifier``),
 so both the verifier and the wallet address are read through callables rather

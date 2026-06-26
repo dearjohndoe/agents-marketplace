@@ -1,14 +1,6 @@
-"""Tests for the TON ChainRail adapters (chains.ton.rail_ton / rail_usdt).
-
-Step 3 of the multichain refactor. These prove the adapters satisfy the
-ChainRail protocol and that their behaviour matches the current TON paths
-bit-for-bit, so step 4 can swap the handlers' literal branching for rail
-objects without changing the wire contract:
-- ``refund`` mirrors the per-rail branch of ``api.domain.refund.refund_user``
-  (cross-checked against tests/test_refund.py).
-- ``payment_option`` mirrors the per-rail dict in ``build_402_response``
-  (cross-checked against the USDT 402 tests in tests/test_api.py).
-"""
+"""Tests for the TON ChainRail adapters (chains.ton.rail_ton / rail_usdt):
+protocol conformance, verify delegation, per-rail refund fee math, the 402
+``payment_option`` shape, and monitor health reporting."""
 
 from __future__ import annotations
 
@@ -84,7 +76,7 @@ async def test_verify_raises_when_verifier_absent():
         await _usdt_rail(verifier=None).verify("tx", "n", 1)
 
 
-# ── refund: bit-for-bit with refund_user per-rail branch ───────────────
+# ── refund: per-rail fee math ──────────────────────────────────────────
 
 
 async def test_ton_refund_sends_amount_minus_fee():

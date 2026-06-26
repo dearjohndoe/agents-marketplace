@@ -1410,10 +1410,8 @@ async def test_free_invoke_limit_not_burned_on_agent_failure(app_factory, tmp_pa
 
 
 # ── USDT rail: 402 payload + verify routing ────────────────────────────
-#
-# The TON rail is exercised throughout this file; these pin the USDT rail's
-# 402 payment_option shape and the /invoke verifier routing, both of which the
-# multichain refactor rewrites (literal "USDT"/"TON" branching → rail dispatch).
+# The USDT rail's 402 payment_option shape and the /invoke verifier routing
+# (the TON rail is exercised throughout the rest of this file).
 
 from chains.ton.jetton import USDT_MASTER_TESTNET  # noqa: E402
 

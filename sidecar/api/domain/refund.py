@@ -12,11 +12,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sidecar")
 
-# NOTE: per-rail refund sending used to live here as ``refund_user`` (a
-# rail == "USDT" branch). It moved into the ChainRail adapters
-# (chains/ton/rail_ton.py, rail_usdt.py); the single dispatch point is now
-# ``SidecarApp.refund_user`` → ``self.rails[rail].refund(...)``. What remains
-# here is rail-agnostic refund *orchestration* (dedup scan + direct-or-enqueue).
+# Rail-agnostic refund orchestration. The per-rail send lives in the ChainRail
+# adapters (SidecarApp.refund_user → rails[rail].refund); here we only scan for
+# an existing on-chain refund and run the direct-or-enqueue fallback.
 
 
 def _decode_refund_comment(body: Any) -> dict[str, Any] | None:

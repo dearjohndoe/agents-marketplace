@@ -31,9 +31,8 @@ class ProcessedTxStore:
             )
             """
         )
-        # Multichain migration (MULTICHAIN_PLAN.md §3): keys are now
-        # chain-namespaced "{chain}:{tx_hash}". Legacy bare keys (no ':') predate
-        # multichain and are all TON — prefix them with 'ton:'. Idempotent.
+        # Keys are chain-namespaced "{chain}:{tx_hash}". Prefix legacy bare keys
+        # (no ':', all TON) with 'ton:'. Idempotent — skips namespaced rows.
         await self._conn.execute(
             "UPDATE processed_txs SET tx_hash = 'ton:' || tx_hash "
             "WHERE tx_hash NOT LIKE '%:%'"

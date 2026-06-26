@@ -98,10 +98,8 @@ async def build_402_response(
         max_age = float(os.environ.get("PAYMENT_MONITOR_MAX_AGE_SEC", "60"))
     except ValueError:
         max_age = 60.0
-    # Rails this SKU can actually be paid on, each paired with the amount to
-    # charge. Which rails are priced is still TON/USDT-specific (that belongs to
-    # the pricing layer and is de-literalized separately); from here on the
-    # health gate and the 402 body are driven off the rail objects.
+    # Rails this SKU can be paid on, each paired with the amount to charge. The
+    # health gate and 402 body below are driven off these rail objects.
     priced: list[tuple[ChainRail, int]] = []
     if eff_ton:
         priced.append((sidecar.rails["TON"], min_ton))
@@ -131,7 +129,7 @@ async def build_402_response(
     payment_options: list[dict[str, Any]] = []
     for rail, amount in priced:
         opt = rail.payment_option(amount, nonce)
-        opt["sku"] = sku.sku_id  # cross-rail field the rail doesn't own
+        opt["sku"] = sku.sku_id  # not rail-specific; added by the caller
         payment_options.append(opt)
 
     # This happens when an SKU uses dynamic pricing and the agent omitted it from
