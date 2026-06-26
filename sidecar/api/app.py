@@ -14,6 +14,9 @@ from storage import StateStore
 from chains.ton.transfer import TransferSender
 from payments import PaymentVerifier, JettonPaymentVerifier, ProcessedTxStore, RefundQueue, TonAPIClient, FreeClaimStore
 from chains.ton.jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
+from chains.base import ChainRail
+from chains.ton.rail_ton import TonRail
+from chains.ton.rail_usdt import UsdtRail
 from owner_bot import OwnerBot
 from settings import Settings, AgentSku, DEFAULT_SKU_ID  # noqa: F401 — re-exported via api package
 from stock import StockStore
@@ -104,6 +107,29 @@ class SidecarApp:
         # sidecar_id is loaded — mirrors the heartbeat pattern above. Bot stays
         # None when TG_BOT_TOKEN / TG_USER_ID_LIST aren't set.
         self.owner_bot: OwnerBot | None = None
+
+        # Payment rails (multichain refactor). Adapters over the verifiers/sender
+        # above; the handlers iterate these instead of branching on "TON"/"USDT".
+        # Late-bound state (verifier instance, agent jetton wallet, sidecar_id)
+        # is read through callables since it's created/loaded after __init__.
+        usdt_master = USDT_MASTER_TESTNET if settings.testnet else USDT_MASTER_MAINNET
+        self.rails: dict[str, ChainRail] = {
+            "TON": TonRail(
+                get_verifier=lambda: self.verifier,
+                sender=self.sender,
+                agent_wallet=settings.agent_wallet,
+                get_sidecar_id=lambda: self.sidecar_id,
+                refund_fee_nanoton=settings.refund_fee_nanoton,
+            ),
+            "USDT": UsdtRail(
+                get_verifier=lambda: self.jetton_verifier,
+                get_agent_jetton_wallet=lambda: self._agent_jetton_wallet,
+                sender=self.sender,
+                agent_wallet=settings.agent_wallet,
+                usdt_master=usdt_master,
+                get_sidecar_id=lambda: self.sidecar_id,
+            ),
+        }
 
     async def refund_user(
         self, recipient: str, payment_amount: int, original_tx_hash: str, reason: str, rail: str = "TON",

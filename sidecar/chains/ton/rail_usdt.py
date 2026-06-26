@@ -33,14 +33,14 @@ class UsdtRail:
         sender: TransferSender,
         agent_wallet: str,
         usdt_master: str,
-        sidecar_id: str,
+        get_sidecar_id: Callable[[], str],
     ) -> None:
         self._get_verifier = get_verifier
         self._get_agent_jetton_wallet = get_agent_jetton_wallet
         self._sender = sender
         self._agent_wallet = agent_wallet
         self._usdt_master = usdt_master
-        self._sidecar_id = sidecar_id
+        self._get_sidecar_id = get_sidecar_id
 
     async def verify(self, proof: str, nonce: str, min_amount: int) -> VerifiedPayment:
         verifier = self._get_verifier()
@@ -59,7 +59,7 @@ class UsdtRail:
             )
             return None
         try:
-            fwd = refund_body(original_tx_hash, reason, self._sidecar_id)
+            fwd = refund_body(original_tx_hash, reason, self._get_sidecar_id())
             return await self._sender.send_jetton(
                 own_jetton_wallet=self._get_agent_jetton_wallet() or "",
                 destination=to,

@@ -35,16 +35,17 @@ class TonRail:
         get_verifier: Callable[[], Any | None],
         sender: TransferSender,
         agent_wallet: str,
-        sidecar_id: str,
+        get_sidecar_id: Callable[[], str],
         refund_fee_nanoton: int,
     ) -> None:
-        # ``get_verifier`` is a callable, not a snapshot: the PaymentVerifier is
-        # created/started in lifecycle and its internal client can be rebuilt,
-        # so we read the live reference on each call.
+        # ``get_verifier``/``get_sidecar_id`` are callables, not snapshots: the
+        # PaymentVerifier is created/started in lifecycle (and its client can be
+        # rebuilt) and ``sidecar_id`` is loaded after construction, so we read
+        # the live references on each call.
         self._get_verifier = get_verifier
         self._sender = sender
         self._agent_wallet = agent_wallet
-        self._sidecar_id = sidecar_id
+        self._get_sidecar_id = get_sidecar_id
         self._refund_fee_nanoton = refund_fee_nanoton
 
     async def verify(self, proof: str, nonce: str, min_amount: int) -> VerifiedPayment:
@@ -69,7 +70,7 @@ class TonRail:
             return None
         try:
             return await self._sender.send(
-                to, refund_amount, refund_body(original_tx_hash, reason, self._sidecar_id),
+                to, refund_amount, refund_body(original_tx_hash, reason, self._get_sidecar_id()),
             )
         except Exception:
             logger.exception("Failed to send refund")

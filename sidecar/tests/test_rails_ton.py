@@ -29,7 +29,7 @@ def _ton_rail(verifier=None, sender=None, refund_fee_nanoton=500_000):
         get_verifier=lambda: verifier,
         sender=sender or SimpleNamespace(send=AsyncMock()),
         agent_wallet="EQagent",
-        sidecar_id="sid-test",
+        get_sidecar_id=lambda: "sid-test",
         refund_fee_nanoton=refund_fee_nanoton,
     )
 
@@ -41,7 +41,7 @@ def _usdt_rail(verifier=None, sender=None, jetton_wallet="EQjw"):
         sender=sender or SimpleNamespace(send_jetton=AsyncMock()),
         agent_wallet="EQagent",
         usdt_master=USDT_MASTER_TESTNET,
-        sidecar_id="sid-test",
+        get_sidecar_id=lambda: "sid-test",
     )
 
 
