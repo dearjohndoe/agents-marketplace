@@ -631,7 +631,7 @@ async def test_invoke_payment_verification_unexpected_enqueues_refund(client):
         assert resp.status == 503
         data = await resp.json()
         assert data["refund_pending"] is True
-        entry = await app.refund_queue.get("txh")
+        entry = await app.refund_queue.get("ton:txh")
         assert entry is not None
         assert entry.status == "pending"
         assert entry.force_refund == 0  # pre-verify, not a force case
@@ -667,7 +667,7 @@ async def test_invoke_happy_path_runs_agent_and_returns_done(client, monkeypatch
     assert data["status"] == "done"
     assert data["result"] == {"type": "text", "data": "translated"}
     # The mark was against the real on-chain hash, not the user-supplied one.
-    app.tx_store.mark_processed.assert_awaited_once_with("real-hash")
+    app.tx_store.mark_processed.assert_awaited_once_with("ton:real-hash")
 
 
 async def test_invoke_agent_runtime_error_triggers_refund(client, monkeypatch):
@@ -1407,3 +1407,137 @@ async def test_free_invoke_limit_not_burned_on_agent_failure(app_factory, tmp_pa
         second = await c.post("/invoke", json={"capability": "translate", "sku": "trial",
                                                "body": {"text": "hi"}})
         assert second.status == 200
+
+
+# ── USDT rail: 402 payload + verify routing ────────────────────────────
+# The USDT rail's 402 payment_option shape and the /invoke verifier routing
+# (the TON rail is exercised throughout the rest of this file).
+
+from chains.ton.jetton import USDT_MASTER_TESTNET  # noqa: E402
+
+
+async def test_invoke_preflight_402_includes_usdt_payment_option(app_factory):
+    app = app_factory(agent_price=1_000_000, agent_price_usdt=2_000_000,
+                      rate_limit_requests=100)
+    app._agent_jetton_wallet = "EQjw"
+    async with _serve_app(app) as c:
+        resp = await c.post("/invoke", json={"capability": "translate"})
+        assert resp.status == 402
+        data = await resp.json()
+        opts = {o["rail"]: o for o in data["payment_options"]}
+        assert set(opts) == {"TON", "USDT"}
+        usdt = opts["USDT"]
+        assert usdt["address"] == "EQagent"
+        assert usdt["amount"] == "2000000"
+        assert usdt["memo"] == data["payment_request"]["memo"]
+        assert usdt["token"] == {"symbol": "USDT", "master": USDT_MASTER_TESTNET,
+                                 "decimals": 6}
+        # payment_request mirrors the first option (TON is listed first).
+        assert data["payment_request"]["rail"] == "TON"
+        # Convenience headers stay TON-only.
+        assert resp.headers["x-ton-pay-address"] == "EQagent"
+
+
+async def test_invoke_preflight_402_usdt_only_sku_has_no_ton_option_or_headers(app_factory):
+    # agent_price=0 ⇒ price_ton=None ⇒ TON rail not advertised.
+    app = app_factory(agent_price=0, agent_price_usdt=2_000_000,
+                      rate_limit_requests=100)
+    app._agent_jetton_wallet = "EQjw"
+    async with _serve_app(app) as c:
+        # A USDT-only SKU rejects the default "TON" rail, so the client must
+        # ask for the USDT rail explicitly even at preflight.
+        resp = await c.post("/invoke", json={"capability": "translate", "rail": "USDT"})
+        assert resp.status == 402
+        data = await resp.json()
+        rails = [o["rail"] for o in data["payment_options"]]
+        assert rails == ["USDT"]
+        assert data["payment_request"]["rail"] == "USDT"
+        assert "x-ton-pay-address" not in resp.headers
+
+
+async def test_invoke_preflight_503_when_usdt_monitor_unhealthy(app_factory):
+    app = app_factory(agent_price=0, agent_price_usdt=2_000_000,
+                      rate_limit_requests=100)
+    app._agent_jetton_wallet = "EQjw"
+    async with _serve_app(app) as c:
+        # Undo the test harness's force-healthy for the jetton monitor.
+        c.sidecar.jetton_verifier.is_healthy = lambda max_age_seconds=60.0: False
+        resp = await c.post("/invoke", json={"capability": "translate", "rail": "USDT"})
+        assert resp.status == 503
+        assert resp.headers["Retry-After"] == "60"
+        assert "USDT" in (await resp.json())["detail"]
+
+
+async def test_invoke_usdt_happy_path_routes_to_jetton_verifier(app_factory, monkeypatch):
+    app = app_factory(agent_price=0, agent_price_usdt=2_000_000,
+                      rate_limit_requests=100)
+    app._agent_jetton_wallet = "EQjw"
+    async with _serve_app(app) as c:
+        app.tx_store.is_processed = AsyncMock(return_value=False)
+        app.tx_store.mark_processed = AsyncMock()
+        # TON verifier must NOT be consulted for a USDT-rail invoke.
+        app.verifier.verify = AsyncMock(side_effect=AssertionError("TON verifier called"))
+        app.jetton_verifier.verify = AsyncMock(return_value=VerifiedPayment(
+            tx_hash="usdt-hash", sender="EQsender", recipient="EQagent",
+            amount=2_000_000, comment="n:sid-test",
+        ))
+
+        async def fake_run(**kwargs):
+            return {"result": {"type": "text", "data": "ok"}}
+
+        monkeypatch.setattr(api_module, "run_agent_subprocess", fake_run)
+
+        resp = await c.post("/invoke", json={
+            "capability": "translate", "rail": "USDT",
+            "tx": "user-tx", "nonce": "n:sid-test", "body": {"text": "hi"},
+        })
+        assert resp.status == 200
+        assert (await resp.json())["status"] == "done"
+        app.jetton_verifier.verify.assert_awaited_once()
+        # Marked against the real on-chain hash, not the user-supplied tx.
+        app.tx_store.mark_processed.assert_awaited_once_with("ton:usdt-hash")
+
+
+async def test_invoke_usdt_unavailable_verifier_enqueues_refund(app_factory):
+    app = app_factory(agent_price=0, agent_price_usdt=2_000_000,
+                      rate_limit_requests=100)
+    async with _serve_app(app) as c:
+        app.tx_store.is_processed = AsyncMock(return_value=False)
+        # Simulate verifier never bootstrapping (liteserver outage / misconfig).
+        app.jetton_verifier = None
+        app._agent_jetton_wallet = None
+        app.ensure_jetton_verifier = AsyncMock(return_value=False)
+        resp = await c.post("/invoke", json={
+            "capability": "translate", "rail": "USDT",
+            "tx": "usdt-tx", "nonce": "n:sid-test", "body": {"text": "hi"},
+        })
+        assert resp.status == 503
+        assert (await resp.json())["refund_pending"] is True
+        entry = await app.refund_queue.get("ton:usdt-tx")
+        assert entry is not None and entry.rail == "USDT" and entry.status == "pending"
+
+
+async def test_invoke_stock_reserve_race_after_payment_refunds_and_returns_409(app_factory, tmp_path, monkeypatch):
+    """claim_stock: stock sold out between preflight and payment. The verified
+    payment is refunded directly (rail-aware) and the caller gets 409 refunded."""
+    app, tc = await _stock_client(app_factory, tmp_path, initial_stock=1)
+    async with tc as c:
+        app.tx_store.is_processed = AsyncMock(return_value=False)
+        app.tx_store.mark_processed = AsyncMock()
+        app.verifier.verify = AsyncMock(return_value=VerifiedPayment(
+            tx_hash="real-hash", sender="EQsender", recipient="EQagent",
+            amount=1_000_000, comment="n:sid-test",
+        ))
+        # Lost the post-payment reservation race.
+        app.stock.reserve = AsyncMock(return_value=False)
+        app.sender.send = AsyncMock(return_value="REFUND_HASH")
+
+        resp = await c.post("/invoke", json={
+            "capability": "translate", "tx": "user-tx", "nonce": "n:sid-test",
+            "body": {"text": "hi"},
+        })
+        assert resp.status == 409
+        data = await resp.json()
+        assert data["error"] == "out_of_stock"
+        assert data["refunded"] is True and data["refund_tx"] == "REFUND_HASH"
+        app.sender.send.assert_awaited_once()

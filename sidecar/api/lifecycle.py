@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from heartbeat import HeartbeatConfig, HeartbeatManager
+from chains.ton.heartbeat import HeartbeatConfig, HeartbeatManager
 from owner_bot import OwnerBot
 
 from api.constants import DESCRIBE_TIMEOUT

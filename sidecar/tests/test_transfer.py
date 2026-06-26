@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import transfer as transfer_module
-from transfer import (
+import chains.ton.transfer as transfer_module
+from chains.ton.transfer import (
     HEARTBEAT_OPCODE,
     PAYMENT_OPCODE,
     REFUND_OPCODE,

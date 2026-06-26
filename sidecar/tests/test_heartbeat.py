@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from heartbeat import HeartbeatConfig, HeartbeatManager
+from chains.ton.heartbeat import HeartbeatConfig, HeartbeatManager
 from storage import SidecarState, StateStore
-from transfer import HEARTBEAT_OPCODE
+from chains.ton.transfer import HEARTBEAT_OPCODE
 
 
 def _make_config(**overrides) -> HeartbeatConfig:

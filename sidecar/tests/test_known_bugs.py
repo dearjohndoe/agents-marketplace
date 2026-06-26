@@ -25,10 +25,10 @@ from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer
 
 import api as api_module
-import transfer as transfer_module
+import chains.ton.transfer as transfer_module
 from api import SidecarApp
 from settings import AgentSku, DEFAULT_SKU_ID, Settings
-from transfer import TransferSender
+from chains.ton.transfer import TransferSender
 from payments import PaymentVerificationError, ProcessedTxStore, VerifiedPayment
 
 
@@ -387,7 +387,7 @@ async def test_heartbeat_loop_respects_configured_interval(tmp_state_path):
     Expected behaviour: the loop's wait timeout should be derived from
     ``self._interval`` (or at least a documented fraction of it).
     """
-    from heartbeat import HeartbeatConfig, HeartbeatManager
+    from chains.ton.heartbeat import HeartbeatConfig, HeartbeatManager
     from storage import StateStore
     import inspect
 
@@ -685,7 +685,8 @@ async def test_refund_queue_enqueues_usdt_when_verifier_unavailable(tmp_path, mo
         assert data.get("tx") == "lost-usdt-tx"
 
         # Tx must be persisted in the refund queue for the worker to pick up.
-        entry = await app.refund_queue.get("lost-usdt-tx")
+        # Key is chain-namespaced now; the response "tx" field stays bare (above).
+        entry = await app.refund_queue.get("ton:lost-usdt-tx")
         assert entry is not None
         assert entry.status == "pending"
         assert entry.rail == "USDT"
@@ -729,7 +730,7 @@ async def test_invoke_blocks_retry_for_tx_in_refund_queue(tmp_path, monkeypatch)
         await app.refund_queue.init()
         # Pre-seed the queue as if a previous request enqueued this tx.
         await app.refund_queue.enqueue(
-            tx_hash="queued-tx", nonce="abc:sid-test", rail="USDT", sku_id="dyn",
+            tx_hash="ton:queued-tx", nonce="abc:sid-test", rail="USDT", sku_id="dyn",
         )
 
     async def fake_shutdown():
@@ -869,7 +870,7 @@ async def test_mark_processed_failure_after_verify_enqueues_refund(tmp_path, mon
         assert resp.status == 503
         data = await resp.json()
         assert data["refund_pending"] is True
-        entry = await app.refund_queue.get("real-hash")
+        entry = await app.refund_queue.get("ton:real-hash")
         assert entry is not None
         assert entry.status == "pending"
         assert entry.sender == "EQsender"
@@ -919,7 +920,7 @@ async def test_jobs_submit_failure_enqueues_refund_with_force(tmp_path, monkeypa
         assert resp.status == 503
         data = await resp.json()
         assert data["refund_pending"] is True
-        entry = await app.refund_queue.get("real-hash")
+        entry = await app.refund_queue.get("ton:real-hash")
         assert entry is not None
         assert entry.force_refund == 1, (
             "mark_processed already ran — worker must bypass is_processed guard"
@@ -1042,9 +1043,9 @@ async def test_refund_worker_dedup_adopts_existing_onchain_hash(tmp_path, monkey
 
         monkeypatch.setattr(worker_module, "_acquire_lite_client", fake_client_ctx)
         monkeypatch.setattr(worker_module, "find_existing_refund_tx", fake_find)
-        monkeypatch.setattr(worker_module, "refund_user", fake_refund_user)
 
-        # Minimal fake app surface for _process_entry.
+        # Minimal fake app surface for _process_entry. The worker dispatches
+        # refunds through app.refund_user (→ rail.refund).
         app = SimpleNamespace(
             refund_queue=rq,
             tx_store=SimpleNamespace(is_processed=AsyncMock(return_value=False)),
@@ -1055,6 +1056,7 @@ async def test_refund_worker_dedup_adopts_existing_onchain_hash(tmp_path, monkey
             sidecar_id="sid-test",
             sender=None, _agent_jetton_wallet=None, verifier=None,
             testnet=False,
+            refund_user=fake_refund_user,
         )
         async def fake_balance_check(*a, **kw):
             return True, ""
@@ -1101,7 +1103,6 @@ async def test_refund_worker_first_attempt_skips_probe(tmp_path, monkeypatch):
         async def fake_refund_user(**kwargs):
             send_calls.append(kwargs)
             return "REFUND_TX_HASH"
-        monkeypatch.setattr(worker_module, "refund_user", fake_refund_user)
 
         async def fake_balance_check(*a, **kw):
             return True, ""
@@ -1117,6 +1118,7 @@ async def test_refund_worker_first_attempt_skips_probe(tmp_path, monkeypatch):
             sidecar_id="sid-test",
             sender=None, _agent_jetton_wallet=None, verifier=None,
             testnet=False,
+            refund_user=fake_refund_user,
         )
 
         await _process_entry(app, entry)
@@ -1223,7 +1225,7 @@ async def test_find_existing_refund_tx_matches_ton_comment(tmp_path):
     by matching (tx, sidecar_id) — reason and other fields are ignored."""
     from unittest.mock import MagicMock
     from api.domain.refund import find_existing_refund_tx
-    from transfer import refund_body
+    from chains.ton.transfer import refund_body
 
     body = refund_body("paid-tx-hash", "out_of_stock", "sid-test")
     # Fake out_msg/tx objects mirroring tonutils' shape: tx.out_msgs, msg.body,

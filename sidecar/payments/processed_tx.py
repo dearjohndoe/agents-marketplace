@@ -31,6 +31,12 @@ class ProcessedTxStore:
             )
             """
         )
+        # Keys are chain-namespaced "{chain}:{tx_hash}". Prefix legacy bare keys
+        # (no ':', all TON) with 'ton:'. Idempotent — skips namespaced rows.
+        await self._conn.execute(
+            "UPDATE processed_txs SET tx_hash = 'ton:' || tx_hash "
+            "WHERE tx_hash NOT LIKE '%:%'"
+        )
         await self._conn.commit()
 
     async def is_processed(self, tx_hash: str) -> bool:

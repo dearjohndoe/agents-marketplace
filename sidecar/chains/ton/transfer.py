@@ -215,7 +215,7 @@ class TransferSender:
             forward_ton_amount: TON attached to recipient notification (nanoton).
             attached_ton: TON attached to cover gas (nanoton).
         """
-        from jetton import jetton_transfer_body
+        from chains.ton.jetton import jetton_transfer_body
 
         body = jetton_transfer_body(
             destination=destination,

@@ -10,8 +10,8 @@ import pytest
 from pytoniq_core import begin_cell
 
 from payments.tonapi_client import TonAPIClient, _wrap_tx
-from payments.ton_monitor import WalletMonitor
-from transfer import PAYMENT_OPCODE
+from chains.ton.ton_monitor import WalletMonitor
+from chains.ton.transfer import PAYMENT_OPCODE
 
 
 def _payment_body_hex(nonce: str) -> str:

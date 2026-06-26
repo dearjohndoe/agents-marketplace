@@ -15,7 +15,7 @@ import urllib.request
 
 import pytest
 
-from jetton import USDT_JETTON_WALLET_CODE_HEX, USDT_MASTER_MAINNET
+from chains.ton.jetton import USDT_JETTON_WALLET_CODE_HEX, USDT_MASTER_MAINNET
 from tonutils.contracts.jetton.master import JettonMasterStablecoin
 
 

@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 from pytoniq_core import Address, Cell, begin_cell
 
-from jetton import (
+from chains.ton.jetton import (
     JETTON_TRANSFER_OPCODE,
     TRANSFER_NOTIFICATION_OPCODE,
     JettonNotification,
     jetton_transfer_body,
     parse_transfer_notification,
 )
-from transfer import PAYMENT_OPCODE
+from chains.ton.transfer import PAYMENT_OPCODE
 
 
 def _build_notification(

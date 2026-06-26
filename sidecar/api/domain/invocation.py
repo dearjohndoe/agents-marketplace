@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import api  # late binding for monkeypatched run_agent_subprocess
+from chains.base import chain_for_rail, namespaced_tx_key
 from api.domain.refund import refund_or_enqueue
 from api.domain.result_processing import is_out_of_stock_result
 from api.validation import validate_result_structure
@@ -92,7 +93,8 @@ def create_runner(
                 refund_tx = await refund_or_enqueue(
                     refund_queue=refund_queue,
                     refund_user_fn=refund_user,
-                    tx_hash=tx_hash, nonce=nonce, rail=rail,
+                    tx_hash=namespaced_tx_key(chain_for_rail(rail), tx_hash),
+                    nonce=nonce, rail=rail,
                     sender=sender, amount=amount, sku_id=sku_id,
                     reason="out_of_stock",
                 )
@@ -148,7 +150,8 @@ def create_runner(
             refund_tx = await refund_or_enqueue(
                 refund_queue=refund_queue,
                 refund_user_fn=refund_user,
-                tx_hash=tx_hash, nonce=nonce, rail=rail,
+                tx_hash=namespaced_tx_key(chain_for_rail(rail), tx_hash),
+                nonce=nonce, rail=rail,
                 sender=sender, amount=amount, sku_id=sku_id,
                 reason=reason_code,
             )

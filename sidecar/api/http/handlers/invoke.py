@@ -11,6 +11,7 @@ from aiohttp import web
 
 from payments import parse_nonce
 from settings import AgentSku, SkuKind
+from chains.base import chain_for_rail, namespaced_tx_key
 
 from api.domain.invocation import create_runner
 from api.domain.pricing import resolve_sku
@@ -92,7 +93,9 @@ async def _resolve_amounts(sku: AgentSku, sidecar: "SidecarApp") -> tuple[int, i
     """Return (eff_ton, eff_usd, min_ton, min_usdt). Dynamic SKUs hit the agent."""
     eff_ton = sku.price_ton or 0
     eff_usd = sku.price_usd or 0
-    if sku.price_ton == 0 and sku.price_usd == 0:
+    # Resolve only the rail(s) priced 0 (the dynamic sentinel); a fixed rail
+    # keeps its static amount. Supports mixed SKUs (one fixed + one floating).
+    if sku.price_ton == 0 or sku.price_usd == 0:
         try:
             prices = await fetch_dynamic_prices(
                 sidecar._dynamic_prices_cache,
@@ -101,8 +104,10 @@ async def _resolve_amounts(sku: AgentSku, sidecar: "SidecarApp") -> tuple[int, i
                 sidecar_id=sidecar.sidecar_id,
             )
             dp = prices.get(sku.sku_id, {})
-            eff_ton = dp.get("ton") or 0
-            eff_usd = dp.get("usd") or 0
+            if sku.price_ton == 0:
+                eff_ton = dp.get("ton") or 0
+            if sku.price_usd == 0:
+                eff_usd = dp.get("usd") or 0
         except Exception:
             logger.warning("Dynamic price fetch failed for SKU %s", sku.sku_id)
     return eff_ton, eff_usd, eff_ton or 0, eff_usd or 0
@@ -284,11 +289,10 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
                 return job_id
             return await wait_and_render(job_id, sidecar)
 
-        if parsed.rail == "TON" and sku.price_ton is None:
-            return web.json_response(
-                {"error": "unsupported_rail_for_sku", "sku": sku.sku_id, "rail": parsed.rail}, status=400,
-            )
-        if parsed.rail == "USDT" and sku.price_usd is None:
+        # Rail-agnostic guard: reject a configured rail this SKU doesn't price.
+        # (Scoped to known rails to preserve the prior behaviour for unknown
+        # rail strings; the literal "TON"/"USDT" pair is gone.)
+        if parsed.rail in sidecar.rails and sku.price_for(parsed.rail) is None:
             return web.json_response(
                 {"error": "unsupported_rail_for_sku", "sku": sku.sku_id, "rail": parsed.rail}, status=400,
             )
@@ -329,14 +333,16 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
             unlock_quote(parsed.quote_id, sidecar)
             return web.json_response({"error": "Nonce sidecar_id mismatch"}, status=402)
 
-        if await sidecar.tx_store.is_processed(parsed.tx_hash):
+        # Chain-namespaced storage key for this tx.
+        tx_key = namespaced_tx_key(chain_for_rail(parsed.rail), parsed.tx_hash)
+        if await sidecar.tx_store.is_processed(tx_key):
             unlock_quote(parsed.quote_id, sidecar)
             return web.json_response({"error": "Transaction already used"}, status=409)
 
         # Block reprocessing of any tx that's already routed to the refund queue.
         # Without this, a /invoke retry could race the refund worker and
         # double-spend the same payment (consume service AND refund).
-        pending = await sidecar.refund_queue.get(parsed.tx_hash)
+        pending = await sidecar.refund_queue.get(tx_key)
         if pending is not None:
             unlock_quote(parsed.quote_id, sidecar)
             if pending.status == "refunded":
@@ -360,8 +366,9 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
         if isinstance(verified, web.Response):
             return verified
 
+        verified_key = namespaced_tx_key(chain_for_rail(parsed.rail), verified.tx_hash)
         try:
-            already = await sidecar.tx_store.is_processed(verified.tx_hash)
+            already = await sidecar.tx_store.is_processed(verified_key)
         except Exception:
             # Money is verified but we can't query tx_store. Don't risk
             # double-processing on retry; let the worker refund.
@@ -378,7 +385,7 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
             return web.json_response({"error": "Transaction already used"}, status=409)
 
         try:
-            await sidecar.tx_store.mark_processed(verified.tx_hash)
+            await sidecar.tx_store.mark_processed(verified_key)
         except aiosqlite.IntegrityError:
             # A parallel /invoke for the same tx won the PRIMARY KEY race.
             # That request owns the service delivery; we just bow out.

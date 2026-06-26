@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import payments as verify_module
-from transfer import payment_body, text_comment_body
+from chains.ton.transfer import payment_body, text_comment_body
 from payments import (
     NonceMeta,
     PaymentVerificationError,

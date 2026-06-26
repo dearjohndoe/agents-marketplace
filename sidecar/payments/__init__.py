@@ -20,10 +20,12 @@ from .refund_queue import (
     STATUS_REFUNDED,
     STATUS_REFUNDING,
 )
-from .ton_monitor import WalletMonitor
-from .ton_verifier import PaymentVerifier
-from .jetton_monitor import JettonWalletMonitor
-from .jetton_verifier import JettonPaymentVerifier
+# TON payment engines live in chains/ton/; re-exported here so `from payments
+# import …` call sites keep working.
+from chains.ton.ton_monitor import WalletMonitor
+from chains.ton.ton_verifier import PaymentVerifier
+from chains.ton.jetton_monitor import JettonWalletMonitor
+from chains.ton.jetton_verifier import JettonPaymentVerifier
 from .tonapi_client import TonAPIClient, TonAPIError, TonAPIRateLimitError
 
 __all__ = [

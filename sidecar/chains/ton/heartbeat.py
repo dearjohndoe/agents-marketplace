@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from pytoniq_core import Cell
 
 from storage import SidecarState, StateStore
-from transfer import TransferFn, heartbeat_body
+from chains.ton.transfer import TransferFn, heartbeat_body
 
 logger = logging.getLogger(__name__)
 

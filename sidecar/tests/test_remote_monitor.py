@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from payments.remote_monitor import (
+from chains.ton.remote_monitor import (
     RemoteJettonWalletMonitor,
     RemoteWalletMonitor,
     _wrap_jetton_entry,

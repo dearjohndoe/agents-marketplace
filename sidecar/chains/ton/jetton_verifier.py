@@ -8,10 +8,10 @@ from tonutils.clients import LiteBalancer
 from tonutils.types import NetworkGlobalID
 
 from .jetton_monitor import JettonWalletMonitor
-from .nonce import parse_nonce
+from payments.nonce import parse_nonce
 from .remote_monitor import RemoteJettonWalletMonitor, _RelayClient, get_relay_url
-from .tonapi_client import TonAPIClient
-from .types import PaymentVerificationError, VerifiedPayment
+from payments.tonapi_client import TonAPIClient
+from payments.types import PaymentVerificationError, VerifiedPayment
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class JettonPaymentVerifier:
 
     async def start(self) -> None:
         from tonutils.contracts.jetton.master import JettonMasterStablecoin
-        from jetton import USDT_JETTON_WALLET_CODE_HEX
+        from chains.ton.jetton import USDT_JETTON_WALLET_CODE_HEX
 
         addr = JettonMasterStablecoin.calculate_user_jetton_wallet_address(
             owner_address=self._agent_wallet,
