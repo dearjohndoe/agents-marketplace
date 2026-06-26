@@ -1,9 +1,4 @@
-"""USDT-on-TON rail — ChainRail adapter over the jetton payment engine.
-
-Companion to ``rail_ton.TonRail`` (see that module's header). Wraps
-``JettonPaymentVerifier`` + the USDT branch of ``refund_user`` +
-``build_402_response``'s USDT option into a ``chains.base.ChainRail``. Not yet
-wired into handlers (step 4). Behaviour is bit-for-bit with today's USDT paths.
+"""USDT-on-TON rail — ChainRail over the jetton payment engine.
 
 The agent's jetton wallet is bootstrapped lazily (``ensure_jetton_verifier``),
 so both the verifier and the wallet address are read through callables rather
@@ -33,14 +28,14 @@ class UsdtRail:
         sender: TransferSender,
         agent_wallet: str,
         usdt_master: str,
-        sidecar_id: str,
+        get_sidecar_id: Callable[[], str],
     ) -> None:
         self._get_verifier = get_verifier
         self._get_agent_jetton_wallet = get_agent_jetton_wallet
         self._sender = sender
         self._agent_wallet = agent_wallet
         self._usdt_master = usdt_master
-        self._sidecar_id = sidecar_id
+        self._get_sidecar_id = get_sidecar_id
 
     async def verify(self, proof: str, nonce: str, min_amount: int) -> VerifiedPayment:
         verifier = self._get_verifier()
@@ -59,7 +54,7 @@ class UsdtRail:
             )
             return None
         try:
-            fwd = refund_body(original_tx_hash, reason, self._sidecar_id)
+            fwd = refund_body(original_tx_hash, reason, self._get_sidecar_id())
             return await self._sender.send_jetton(
                 own_jetton_wallet=self._get_agent_jetton_wallet() or "",
                 destination=to,

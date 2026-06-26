@@ -631,7 +631,7 @@ async def test_invoke_payment_verification_unexpected_enqueues_refund(client):
         assert resp.status == 503
         data = await resp.json()
         assert data["refund_pending"] is True
-        entry = await app.refund_queue.get("txh")
+        entry = await app.refund_queue.get("ton:txh")
         assert entry is not None
         assert entry.status == "pending"
         assert entry.force_refund == 0  # pre-verify, not a force case
@@ -667,7 +667,7 @@ async def test_invoke_happy_path_runs_agent_and_returns_done(client, monkeypatch
     assert data["status"] == "done"
     assert data["result"] == {"type": "text", "data": "translated"}
     # The mark was against the real on-chain hash, not the user-supplied one.
-    app.tx_store.mark_processed.assert_awaited_once_with("real-hash")
+    app.tx_store.mark_processed.assert_awaited_once_with("ton:real-hash")
 
 
 async def test_invoke_agent_runtime_error_triggers_refund(client, monkeypatch):
@@ -1410,10 +1410,8 @@ async def test_free_invoke_limit_not_burned_on_agent_failure(app_factory, tmp_pa
 
 
 # ── USDT rail: 402 payload + verify routing ────────────────────────────
-#
-# The TON rail is exercised throughout this file; these pin the USDT rail's
-# 402 payment_option shape and the /invoke verifier routing, both of which the
-# multichain refactor rewrites (literal "USDT"/"TON" branching → rail dispatch).
+# The USDT rail's 402 payment_option shape and the /invoke verifier routing
+# (the TON rail is exercised throughout the rest of this file).
 
 from chains.ton.jetton import USDT_MASTER_TESTNET  # noqa: E402
 
@@ -1497,7 +1495,7 @@ async def test_invoke_usdt_happy_path_routes_to_jetton_verifier(app_factory, mon
         assert (await resp.json())["status"] == "done"
         app.jetton_verifier.verify.assert_awaited_once()
         # Marked against the real on-chain hash, not the user-supplied tx.
-        app.tx_store.mark_processed.assert_awaited_once_with("usdt-hash")
+        app.tx_store.mark_processed.assert_awaited_once_with("ton:usdt-hash")
 
 
 async def test_invoke_usdt_unavailable_verifier_enqueues_refund(app_factory):
@@ -1515,7 +1513,7 @@ async def test_invoke_usdt_unavailable_verifier_enqueues_refund(app_factory):
         })
         assert resp.status == 503
         assert (await resp.json())["refund_pending"] is True
-        entry = await app.refund_queue.get("usdt-tx")
+        entry = await app.refund_queue.get("ton:usdt-tx")
         assert entry is not None and entry.rail == "USDT" and entry.status == "pending"
 
 

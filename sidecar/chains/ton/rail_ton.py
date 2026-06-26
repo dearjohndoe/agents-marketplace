@@ -1,19 +1,4 @@
-"""TON native rail — ChainRail adapter over the existing TON payment engine.
-
-Step 3 of the multichain refactor (MULTICHAIN_PLAN.md). This wraps the pieces
-that today are scattered across ``PaymentVerifier``, ``_invoke_helpers`` and
-``api.domain.refund.refund_user`` into one object that satisfies
-``chains.base.ChainRail``. It is NOT yet wired into the handlers — step 4
-rewires ``build_402_response``/``verify_payment`` to iterate rail objects. Until
-then this is exercised only by unit tests.
-
-Behaviour is bit-for-bit with the current TON paths:
-- ``refund`` is the exact TON branch of ``refund_user`` (the per-rail dispatch
-  that the refactor eliminates — each rail now owns only its own refund).
-- ``payment_option`` is the TON dict built in ``build_402_response``.
-- ``rail_id``/the ``"rail"`` wire value stay ``"TON"``; migrating to the
-  canonical lowercase scheme ("ton", "ton:usdt") is protocol-v2 work (plan §4).
-"""
+"""TON native rail — ChainRail over the TON payment engine (verifier + sender)."""
 
 from __future__ import annotations
 
@@ -35,16 +20,17 @@ class TonRail:
         get_verifier: Callable[[], Any | None],
         sender: TransferSender,
         agent_wallet: str,
-        sidecar_id: str,
+        get_sidecar_id: Callable[[], str],
         refund_fee_nanoton: int,
     ) -> None:
-        # ``get_verifier`` is a callable, not a snapshot: the PaymentVerifier is
-        # created/started in lifecycle and its internal client can be rebuilt,
-        # so we read the live reference on each call.
+        # ``get_verifier``/``get_sidecar_id`` are callables, not snapshots: the
+        # PaymentVerifier is created/started in lifecycle (and its client can be
+        # rebuilt) and ``sidecar_id`` is loaded after construction, so we read
+        # the live references on each call.
         self._get_verifier = get_verifier
         self._sender = sender
         self._agent_wallet = agent_wallet
-        self._sidecar_id = sidecar_id
+        self._get_sidecar_id = get_sidecar_id
         self._refund_fee_nanoton = refund_fee_nanoton
 
     async def verify(self, proof: str, nonce: str, min_amount: int) -> VerifiedPayment:
@@ -69,7 +55,7 @@ class TonRail:
             return None
         try:
             return await self._sender.send(
-                to, refund_amount, refund_body(original_tx_hash, reason, self._sidecar_id),
+                to, refund_amount, refund_body(original_tx_hash, reason, self._get_sidecar_id()),
             )
         except Exception:
             logger.exception("Failed to send refund")

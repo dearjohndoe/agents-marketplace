@@ -1,11 +1,6 @@
-"""Characterization tests for api.domain.refund.
-
-Locks the per-rail refund dispatch (``refund_user``: TON ``send`` vs USDT
-``send_jetton`` with their distinct fee math), the direct-then-enqueue fallback
-(``refund_or_enqueue``), and the on-chain dedup scan (``find_existing_refund_tx``)
-before the multichain refactor turns ``rail == "USDT"`` branching into
-ChainRail-object dispatch.
-"""
+"""Tests for api.domain.refund: the direct-then-enqueue fallback
+(``refund_or_enqueue``) and the on-chain dedup scan (``find_existing_refund_tx``).
+Per-rail refund sending lives in the ChainRail adapters (test_rails_ton.py)."""
 
 from __future__ import annotations
 
@@ -14,92 +9,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from chains.ton.jetton import USDT_REFUND_FEE
 from chains.ton.transfer import refund_body
-from api.domain.refund import find_existing_refund_tx, refund_or_enqueue, refund_user
+from api.domain.refund import find_existing_refund_tx, refund_or_enqueue
 from payments.refund_queue import RefundQueue
-
-
-def _sender(**kw):
-    return SimpleNamespace(send=AsyncMock(**kw.get("send", {})),
-                           send_jetton=AsyncMock(**kw.get("send_jetton", {})))
-
-
-# ── refund_user: TON rail ──────────────────────────────────────────────
-
-
-async def test_refund_user_ton_sends_amount_minus_fee():
-    sender = _sender(send={"return_value": "TON_REFUND"})
-    tx = await refund_user(
-        sender=sender, agent_jetton_wallet=None, sidecar_id="sid",
-        refund_fee_nanoton=100, recipient="EQu", payment_amount=1000,
-        original_tx_hash="tx", reason="timeout",
-    )
-    assert tx == "TON_REFUND"
-    sender.send_jetton.assert_not_awaited()
-    dest, amount, _body = sender.send.call_args.args
-    assert dest == "EQu" and amount == 900
-
-
-async def test_refund_user_ton_skipped_when_amount_below_fee():
-    sender = _sender()
-    tx = await refund_user(
-        sender=sender, agent_jetton_wallet=None, sidecar_id="sid",
-        refund_fee_nanoton=1000, recipient="EQu", payment_amount=500,
-        original_tx_hash="tx", reason="timeout",
-    )
-    assert tx is None
-    sender.send.assert_not_awaited()
-
-
-async def test_refund_user_ton_swallows_send_exception():
-    sender = _sender(send={"side_effect": RuntimeError("ton down")})
-    tx = await refund_user(
-        sender=sender, agent_jetton_wallet=None, sidecar_id="sid",
-        refund_fee_nanoton=100, recipient="EQu", payment_amount=1000,
-        original_tx_hash="tx", reason="timeout",
-    )
-    assert tx is None
-
-
-# ── refund_user: USDT rail ─────────────────────────────────────────────
-
-
-async def test_refund_user_usdt_sends_jetton_amount_minus_usdt_fee():
-    sender = _sender(send_jetton={"return_value": "USDT_REFUND"})
-    tx = await refund_user(
-        sender=sender, agent_jetton_wallet="EQjw", sidecar_id="sid",
-        refund_fee_nanoton=999_999,  # TON fee must be ignored on USDT rail
-        recipient="EQu", payment_amount=1_000_000,
-        original_tx_hash="tx", reason="timeout", rail="USDT",
-    )
-    assert tx == "USDT_REFUND"
-    sender.send.assert_not_awaited()
-    kwargs = sender.send_jetton.call_args.kwargs
-    assert kwargs["own_jetton_wallet"] == "EQjw"
-    assert kwargs["destination"] == "EQu"
-    assert kwargs["jetton_amount"] == 1_000_000 - USDT_REFUND_FEE
-
-
-async def test_refund_user_usdt_skipped_when_amount_below_usdt_fee():
-    sender = _sender()
-    tx = await refund_user(
-        sender=sender, agent_jetton_wallet="EQjw", sidecar_id="sid",
-        refund_fee_nanoton=0, recipient="EQu", payment_amount=USDT_REFUND_FEE,
-        original_tx_hash="tx", reason="timeout", rail="USDT",
-    )
-    assert tx is None
-    sender.send_jetton.assert_not_awaited()
-
-
-async def test_refund_user_usdt_swallows_send_exception():
-    sender = _sender(send_jetton={"side_effect": RuntimeError("jetton down")})
-    tx = await refund_user(
-        sender=sender, agent_jetton_wallet="EQjw", sidecar_id="sid",
-        refund_fee_nanoton=0, recipient="EQu", payment_amount=1_000_000,
-        original_tx_hash="tx", reason="timeout", rail="USDT",
-    )
-    assert tx is None
 
 
 # ── refund_or_enqueue ──────────────────────────────────────────────────

@@ -4,65 +4,17 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from chains.ton.jetton import JETTON_TRANSFER_OPCODE, USDT_REFUND_FEE
-from chains.ton.transfer import REFUND_OPCODE, TransferSender, refund_body
+from chains.ton.jetton import JETTON_TRANSFER_OPCODE
+from chains.ton.transfer import REFUND_OPCODE
 
 if TYPE_CHECKING:
     from payments.refund_queue import RefundQueue
 
 logger = logging.getLogger("sidecar")
 
-
-async def refund_user(
-    *,
-    sender: TransferSender,
-    agent_jetton_wallet: str | None,
-    sidecar_id: str,
-    refund_fee_nanoton: int,
-    recipient: str,
-    payment_amount: int,
-    original_tx_hash: str,
-    reason: str,
-    rail: str = "TON",
-) -> str | None:
-    """Send refund back to `recipient`. Returns refund tx hash on success, None otherwise."""
-    if rail == "USDT":
-        refund_amount = max(payment_amount - USDT_REFUND_FEE, 0)
-        if refund_amount <= 0:
-            logger.warning(
-                "USDT refund skipped: amount too small after fee",
-                extra={"tx_hash": original_tx_hash, "payment_amount": payment_amount},
-            )
-            return None
-        try:
-            fwd = refund_body(original_tx_hash, reason, sidecar_id)
-            return await sender.send_jetton(
-                own_jetton_wallet=agent_jetton_wallet or "",
-                destination=recipient,
-                jetton_amount=refund_amount,
-                forward_payload=fwd,
-            )
-        except Exception:
-            logger.exception("Failed to send USDT refund")
-            return None
-
-    refund_amount = max(payment_amount - refund_fee_nanoton, 0)
-    if refund_amount <= 0:
-        logger.warning(
-            "Refund skipped because amount is not enough after fee",
-            extra={
-                "tx_hash": original_tx_hash,
-                "payment_amount": payment_amount,
-                "refund_fee": refund_fee_nanoton,
-            },
-        )
-        return None
-
-    try:
-        return await sender.send(recipient, refund_amount, refund_body(original_tx_hash, reason, sidecar_id))
-    except Exception:
-        logger.exception("Failed to send refund")
-        return None
+# Rail-agnostic refund orchestration. The per-rail send lives in the ChainRail
+# adapters (SidecarApp.refund_user → rails[rail].refund); here we only scan for
+# an existing on-chain refund and run the direct-or-enqueue fallback.
 
 
 def _decode_refund_comment(body: Any) -> dict[str, Any] | None:

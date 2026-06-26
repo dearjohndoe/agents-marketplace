@@ -1,11 +1,6 @@
-"""Characterization tests for payments.refund_queue.RefundQueue.
-
-Pins the SQLite-backed state machine — enqueue idempotency, atomic claim,
-due-selection, and every status transition — plus the fields the refactor
-relies on (``rail``, ``force_refund``). This is the contract that must survive
-the planned ``tx_hash`` → ``{chain}:{tx_id}`` key namespacing migration: the
-migration is only safe if current dedup/transition behaviour is locked first.
-"""
+"""Tests for payments.refund_queue.RefundQueue — the SQLite-backed state
+machine: enqueue idempotency, atomic claim, due-selection, every status
+transition, and the ``rail`` / ``force_refund`` fields."""
 
 from __future__ import annotations
 
@@ -170,6 +165,28 @@ async def test_mark_failed_transient_truncates_long_error(rq):
     await rq.claim("TX")
     await rq.mark_failed_transient("TX", "x" * 1000, backoff_seconds=1)
     assert len((await rq.get("TX")).last_error) == 500
+
+
+# ── defer_pending (pre-claim backoff) ──────────────────────────────────
+
+
+async def test_defer_pending_records_error_and_backoff_without_claiming(rq):
+    await rq.enqueue(tx_hash="TX", nonce="n", rail="TON")  # still pending
+    before = int(time.time())
+    await rq.defer_pending("TX", "could not recover", backoff_seconds=30)
+    rec = await rq.get("TX")
+    assert rec.status == STATUS_PENDING
+    assert rec.last_error == "could not recover"
+    assert rec.next_attempt_at >= before + 30
+    assert rec.attempts == 0  # no claim happened
+
+
+async def test_defer_pending_noop_when_not_pending(rq):
+    await rq.enqueue(tx_hash="TX", nonce="n", rail="TON")
+    await rq.claim("TX")  # → refunding
+    await rq.defer_pending("TX", "e", backoff_seconds=10)
+    rec = await rq.get("TX")
+    assert rec.status == STATUS_REFUNDING and rec.last_error is None
 
 
 # ── mark_failed_permanent ──────────────────────────────────────────────

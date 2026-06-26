@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from chains.ton.jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
+from chains.base import ChainRail, chain_for_rail, namespaced_tx_key
 from payments import PaymentVerificationError
 from settings import AgentSku
 
@@ -45,7 +45,7 @@ async def enqueue_refund_after_payment(
     unlock_quote(parsed.quote_id, sidecar)
     try:
         await sidecar.refund_queue.enqueue(
-            tx_hash=parsed.tx_hash,
+            tx_hash=namespaced_tx_key(chain_for_rail(parsed.rail), parsed.tx_hash),
             nonce=parsed.nonce,
             rail=parsed.rail,
             sender=sender,
@@ -98,13 +98,15 @@ async def build_402_response(
         max_age = float(os.environ.get("PAYMENT_MONITOR_MAX_AGE_SEC", "60"))
     except ValueError:
         max_age = 60.0
-    unhealthy_rails: list[str] = []
-    if eff_ton and (sidecar.verifier is None or not sidecar.verifier.is_healthy(max_age)):
-        unhealthy_rails.append("TON")
-    if eff_usd and min_usdt and (
-        sidecar.jetton_verifier is None or not sidecar.jetton_verifier.is_healthy(max_age)
-    ):
-        unhealthy_rails.append("USDT")
+    # Rails this SKU can be paid on, each paired with the amount to charge. The
+    # health gate and 402 body below are driven off these rail objects.
+    priced: list[tuple[ChainRail, int]] = []
+    if eff_ton:
+        priced.append((sidecar.rails["TON"], min_ton))
+    if eff_usd and min_usdt:
+        priced.append((sidecar.rails["USDT"], min_usdt))
+
+    unhealthy_rails = [r.rail_id for r, _ in priced if not r.monitor_healthy(max_age)]
     if unhealthy_rails:
         logger.warning(
             "preflight refused: payment monitor degraded for rails=%s sku=%s",
@@ -125,24 +127,10 @@ async def build_402_response(
         nonce = f"{uuid.uuid4().hex[:16]}:{sidecar.sidecar_id}"
 
     payment_options: list[dict[str, Any]] = []
-    if eff_ton:
-        payment_options.append({
-            "rail": "TON",
-            "address": sidecar.settings.agent_wallet,
-            "amount": str(min_ton),
-            "memo": nonce,
-            "sku": sku.sku_id,
-        })
-    if eff_usd and min_usdt:
-        usdt_master = USDT_MASTER_TESTNET if sidecar.settings.testnet else USDT_MASTER_MAINNET
-        payment_options.append({
-            "rail": "USDT",
-            "address": sidecar.settings.agent_wallet,
-            "amount": str(min_usdt),
-            "memo": nonce,
-            "sku": sku.sku_id,
-            "token": {"symbol": "USDT", "master": usdt_master, "decimals": 6},
-        })
+    for rail, amount in priced:
+        opt = rail.payment_option(amount, nonce)
+        opt["sku"] = sku.sku_id  # not rail-specific; added by the caller
+        payment_options.append(opt)
 
     # This happens when an SKU uses dynamic pricing and the agent omitted it from
     # `mode=prices` — typically because it's out of stock upstream. Emitting a
@@ -187,7 +175,7 @@ async def verify_payment(
                 bootstrapped = await sidecar.ensure_jetton_verifier()
                 if not bootstrapped:
                     await sidecar.refund_queue.enqueue(
-                        tx_hash=parsed.tx_hash,
+                        tx_hash=namespaced_tx_key(chain_for_rail("USDT"), parsed.tx_hash),
                         nonce=parsed.nonce,
                         rail="USDT",
                         sku_id=sku.sku_id,
@@ -225,8 +213,8 @@ async def verify_payment(
                     sender=None, amount=None,
                     reason="usdt_price_unavailable",
                 )
-            return await sidecar.jetton_verifier.verify(
-                tx_hash=parsed.tx_hash, raw_nonce=parsed.nonce, min_amount=min_usdt,
+            return await sidecar.rails["USDT"].verify(
+                proof=parsed.tx_hash, nonce=parsed.nonce, min_amount=min_usdt,
             )
         if min_ton == 0:
             logger.warning(
@@ -238,8 +226,8 @@ async def verify_payment(
                 sender=None, amount=None,
                 reason="ton_price_unavailable",
             )
-        return await sidecar.verifier.verify(
-            tx_hash=parsed.tx_hash, raw_nonce=parsed.nonce, min_amount=min_ton,
+        return await sidecar.rails["TON"].verify(
+            proof=parsed.tx_hash, nonce=parsed.nonce, min_amount=min_ton,
         )
     except PaymentVerificationError as exc:
         # Verifier saw on-chain state and rejected: tx not found, wrong amount,
@@ -293,7 +281,9 @@ async def claim_stock(
             refund_tx = await sidecar.refund_user(
                 recipient=verified_payment.sender,
                 payment_amount=verified_payment.amount,
-                original_tx_hash=verified_payment.tx_hash,
+                original_tx_hash=namespaced_tx_key(
+                    chain_for_rail(parsed.rail), verified_payment.tx_hash,
+                ),
                 reason="out_of_stock",
                 rail=parsed.rail,
             )

@@ -14,12 +14,14 @@ from storage import StateStore
 from chains.ton.transfer import TransferSender
 from payments import PaymentVerifier, JettonPaymentVerifier, ProcessedTxStore, RefundQueue, TonAPIClient, FreeClaimStore
 from chains.ton.jetton import USDT_MASTER_MAINNET, USDT_MASTER_TESTNET
+from chains.base import ChainRail
+from chains.ton.rail_ton import TonRail
+from chains.ton.rail_usdt import UsdtRail
 from owner_bot import OwnerBot
 from settings import Settings, AgentSku, DEFAULT_SKU_ID  # noqa: F401 — re-exported via api package
 from stock import StockStore
 
 from api.domain.quoting import DynamicPriceCache, QuoteEntry, cleanup_expired_quotes
-from api.domain.refund import refund_user as _refund_user
 from api.domain.result_processing import process_file_result, safe_extract_result
 from api.infra.cleanup import cleanup_loop as _cleanup_loop
 from api.infra.files import cleanup_expired_files, cleanup_file
@@ -105,19 +107,39 @@ class SidecarApp:
         # None when TG_BOT_TOKEN / TG_USER_ID_LIST aren't set.
         self.owner_bot: OwnerBot | None = None
 
+        # Payment rails, keyed by rail id. Late-bound state (verifier instance,
+        # agent jetton wallet, sidecar_id) is read through callables since it's
+        # created/loaded after __init__.
+        usdt_master = USDT_MASTER_TESTNET if settings.testnet else USDT_MASTER_MAINNET
+        self.rails: dict[str, ChainRail] = {
+            "TON": TonRail(
+                get_verifier=lambda: self.verifier,
+                sender=self.sender,
+                agent_wallet=settings.agent_wallet,
+                get_sidecar_id=lambda: self.sidecar_id,
+                refund_fee_nanoton=settings.refund_fee_nanoton,
+            ),
+            "USDT": UsdtRail(
+                get_verifier=lambda: self.jetton_verifier,
+                get_agent_jetton_wallet=lambda: self._agent_jetton_wallet,
+                sender=self.sender,
+                agent_wallet=settings.agent_wallet,
+                usdt_master=usdt_master,
+                get_sidecar_id=lambda: self.sidecar_id,
+            ),
+        }
+
     async def refund_user(
         self, recipient: str, payment_amount: int, original_tx_hash: str, reason: str, rail: str = "TON",
     ) -> str | None:
-        return await _refund_user(
-            sender=self.sender,
-            agent_jetton_wallet=self._agent_jetton_wallet,
-            sidecar_id=self.sidecar_id,
-            refund_fee_nanoton=self.settings.refund_fee_nanoton,
-            recipient=recipient,
-            payment_amount=payment_amount,
-            original_tx_hash=original_tx_hash,
-            reason=reason,
-            rail=rail,
+        """Refund a payment on its rail. Single dispatch point — delegates to the
+        ChainRail, which owns the rail's fee math and send path."""
+        chain_rail = self.rails.get(rail)
+        if chain_rail is None:
+            logger.error("refund_user: unknown rail %r tx=%s — cannot refund", rail, original_tx_hash)
+            return None
+        return await chain_rail.refund(
+            recipient, payment_amount, original_tx_hash=original_tx_hash, reason=reason,
         )
 
     async def ensure_jetton_verifier(self) -> bool:
