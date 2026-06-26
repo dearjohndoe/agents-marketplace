@@ -11,6 +11,7 @@ from aiohttp import web
 
 from payments import parse_nonce
 from settings import AgentSku, SkuKind
+from chains.base import chain_for_rail, namespaced_tx_key
 
 from api.domain.invocation import create_runner
 from api.domain.pricing import resolve_sku
@@ -333,14 +334,16 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
             unlock_quote(parsed.quote_id, sidecar)
             return web.json_response({"error": "Nonce sidecar_id mismatch"}, status=402)
 
-        if await sidecar.tx_store.is_processed(parsed.tx_hash):
+        # Chain-namespaced storage key for this tx (MULTICHAIN_PLAN.md §3).
+        tx_key = namespaced_tx_key(chain_for_rail(parsed.rail), parsed.tx_hash)
+        if await sidecar.tx_store.is_processed(tx_key):
             unlock_quote(parsed.quote_id, sidecar)
             return web.json_response({"error": "Transaction already used"}, status=409)
 
         # Block reprocessing of any tx that's already routed to the refund queue.
         # Without this, a /invoke retry could race the refund worker and
         # double-spend the same payment (consume service AND refund).
-        pending = await sidecar.refund_queue.get(parsed.tx_hash)
+        pending = await sidecar.refund_queue.get(tx_key)
         if pending is not None:
             unlock_quote(parsed.quote_id, sidecar)
             if pending.status == "refunded":
@@ -364,8 +367,9 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
         if isinstance(verified, web.Response):
             return verified
 
+        verified_key = namespaced_tx_key(chain_for_rail(parsed.rail), verified.tx_hash)
         try:
-            already = await sidecar.tx_store.is_processed(verified.tx_hash)
+            already = await sidecar.tx_store.is_processed(verified_key)
         except Exception:
             # Money is verified but we can't query tx_store. Don't risk
             # double-processing on retry; let the worker refund.
@@ -382,7 +386,7 @@ async def handle_invoke(request: web.Request, sidecar: "SidecarApp") -> web.Resp
             return web.json_response({"error": "Transaction already used"}, status=409)
 
         try:
-            await sidecar.tx_store.mark_processed(verified.tx_hash)
+            await sidecar.tx_store.mark_processed(verified_key)
         except aiosqlite.IntegrityError:
             # A parallel /invoke for the same tx won the PRIMARY KEY race.
             # That request owns the service delivery; we just bow out.

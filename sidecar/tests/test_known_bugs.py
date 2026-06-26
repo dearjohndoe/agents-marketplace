@@ -685,7 +685,8 @@ async def test_refund_queue_enqueues_usdt_when_verifier_unavailable(tmp_path, mo
         assert data.get("tx") == "lost-usdt-tx"
 
         # Tx must be persisted in the refund queue for the worker to pick up.
-        entry = await app.refund_queue.get("lost-usdt-tx")
+        # Key is chain-namespaced now; the response "tx" field stays bare (above).
+        entry = await app.refund_queue.get("ton:lost-usdt-tx")
         assert entry is not None
         assert entry.status == "pending"
         assert entry.rail == "USDT"
@@ -729,7 +730,7 @@ async def test_invoke_blocks_retry_for_tx_in_refund_queue(tmp_path, monkeypatch)
         await app.refund_queue.init()
         # Pre-seed the queue as if a previous request enqueued this tx.
         await app.refund_queue.enqueue(
-            tx_hash="queued-tx", nonce="abc:sid-test", rail="USDT", sku_id="dyn",
+            tx_hash="ton:queued-tx", nonce="abc:sid-test", rail="USDT", sku_id="dyn",
         )
 
     async def fake_shutdown():
@@ -869,7 +870,7 @@ async def test_mark_processed_failure_after_verify_enqueues_refund(tmp_path, mon
         assert resp.status == 503
         data = await resp.json()
         assert data["refund_pending"] is True
-        entry = await app.refund_queue.get("real-hash")
+        entry = await app.refund_queue.get("ton:real-hash")
         assert entry is not None
         assert entry.status == "pending"
         assert entry.sender == "EQsender"
@@ -919,7 +920,7 @@ async def test_jobs_submit_failure_enqueues_refund_with_force(tmp_path, monkeypa
         assert resp.status == 503
         data = await resp.json()
         assert data["refund_pending"] is True
-        entry = await app.refund_queue.get("real-hash")
+        entry = await app.refund_queue.get("ton:real-hash")
         assert entry is not None
         assert entry.force_refund == 1, (
             "mark_processed already ran — worker must bypass is_processed guard"

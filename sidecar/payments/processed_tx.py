@@ -31,6 +31,13 @@ class ProcessedTxStore:
             )
             """
         )
+        # Multichain migration (MULTICHAIN_PLAN.md §3): keys are now
+        # chain-namespaced "{chain}:{tx_hash}". Legacy bare keys (no ':') predate
+        # multichain and are all TON — prefix them with 'ton:'. Idempotent.
+        await self._conn.execute(
+            "UPDATE processed_txs SET tx_hash = 'ton:' || tx_hash "
+            "WHERE tx_hash NOT LIKE '%:%'"
+        )
         await self._conn.commit()
 
     async def is_processed(self, tx_hash: str) -> bool:

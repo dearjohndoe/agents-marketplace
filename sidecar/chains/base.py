@@ -21,6 +21,31 @@ from typing import Any, Protocol, runtime_checkable
 from payments.types import VerifiedPayment
 
 
+# ── chain namespacing (MULTICHAIN_PLAN.md §3) ──────────────────────────
+#
+# Persisted tx identifiers (processed_txs dedup keys, refund_queue PKs, and the
+# refund memo's "tx" field) are namespaced ``{chain}:{tx_hash}`` so a TON hash
+# and a Solana signature can never collide. The chain is derived from the rail:
+# TON-native and USDT-on-TON both settle on "ton".
+
+_RAIL_TO_CHAIN = {"TON": "ton", "USDT": "ton"}
+
+
+def chain_for_rail(rail_id: str) -> str:
+    """Chain a rail settles on (e.g. "TON"/"USDT" → "ton")."""
+    return _RAIL_TO_CHAIN.get(rail_id, rail_id.lower())
+
+
+def namespaced_tx_key(chain: str, tx_hash: str) -> str:
+    """``{chain}:{tx_hash}``. Idempotent: an already-namespaced value (one that
+    contains ``:`` — bare TON hashes / Solana sigs never do) is returned as-is,
+    so wrapping twice is a safe no-op. Migration of legacy bare keys treats them
+    as ``ton:`` (see the stores' ``init``)."""
+    if ":" in tx_hash:
+        return tx_hash
+    return f"{chain}:{tx_hash}"
+
+
 @runtime_checkable
 class ChainRail(Protocol):
     """One payment rail: verify an incoming payment, refund it, describe itself

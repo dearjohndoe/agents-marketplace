@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from chains.base import ChainRail
+from chains.base import ChainRail, chain_for_rail, namespaced_tx_key
 from payments import PaymentVerificationError
 from settings import AgentSku
 
@@ -45,7 +45,7 @@ async def enqueue_refund_after_payment(
     unlock_quote(parsed.quote_id, sidecar)
     try:
         await sidecar.refund_queue.enqueue(
-            tx_hash=parsed.tx_hash,
+            tx_hash=namespaced_tx_key(chain_for_rail(parsed.rail), parsed.tx_hash),
             nonce=parsed.nonce,
             rail=parsed.rail,
             sender=sender,
@@ -177,7 +177,7 @@ async def verify_payment(
                 bootstrapped = await sidecar.ensure_jetton_verifier()
                 if not bootstrapped:
                     await sidecar.refund_queue.enqueue(
-                        tx_hash=parsed.tx_hash,
+                        tx_hash=namespaced_tx_key(chain_for_rail("USDT"), parsed.tx_hash),
                         nonce=parsed.nonce,
                         rail="USDT",
                         sku_id=sku.sku_id,
@@ -283,7 +283,9 @@ async def claim_stock(
             refund_tx = await sidecar.refund_user(
                 recipient=verified_payment.sender,
                 payment_amount=verified_payment.amount,
-                original_tx_hash=verified_payment.tx_hash,
+                original_tx_hash=namespaced_tx_key(
+                    chain_for_rail(parsed.rail), verified_payment.tx_hash,
+                ),
                 reason="out_of_stock",
                 rail=parsed.rail,
             )

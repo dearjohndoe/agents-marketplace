@@ -95,6 +95,13 @@ class RefundQueue:
             "CREATE INDEX IF NOT EXISTS idx_pending_refunds_status_next "
             "ON pending_refunds(status, next_attempt_at)"
         )
+        # Multichain migration (MULTICHAIN_PLAN.md §3): tx_hash keys are now
+        # chain-namespaced "{chain}:{tx_hash}". Legacy bare keys (no ':') are all
+        # TON — prefix with 'ton:'. Idempotent (skips already-namespaced rows).
+        await self._conn.execute(
+            "UPDATE pending_refunds SET tx_hash = 'ton:' || tx_hash "
+            "WHERE tx_hash NOT LIKE '%:%'"
+        )
         await self._conn.commit()
 
     async def close(self) -> None:
